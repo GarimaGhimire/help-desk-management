@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS document_access;
+DROP TABLE IF EXISTS documents;
+DROP TABLE IF EXISTS messages;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS otp_codes;
+DROP TABLE IF EXISTS users;
+
+DROP TYPE IF EXISTS doc_visibility;
+DROP TYPE IF EXISTS otp_channel;
+DROP TYPE IF EXISTS group_member_role;
+DROP TYPE IF EXISTS group_type;
+DROP TYPE IF EXISTS user_role;

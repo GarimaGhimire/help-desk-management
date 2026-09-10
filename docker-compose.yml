@@ -1,0 +1,54 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: helpdesk
+      POSTGRES_PASSWORD: helpdesk_dev
+      POSTGRES_DB: helpdesk
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helpdesk"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    image: migrate/migrate:v4.17.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/migrations:/migrations
+    command:
+      - "-path=/migrations"
+      - "-database=postgres://helpdesk:helpdesk_dev@postgres:5432/helpdesk?sslmode=disable"
+      - "up"
+
+  backend:
+    image: golang:1.22-alpine
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://helpdesk:helpdesk_dev@postgres:5432/helpdesk?sslmode=disable
+      JWT_SECRET: dev-secret-change-in-prod
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+    command: sh -c "go build -o /tmp/api ./cmd/api && /tmp/api"
+
+  frontend:
+    image: node:20-alpine
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+
+volumes:
+  pgdata:

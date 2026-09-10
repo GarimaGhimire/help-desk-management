@@ -1,0 +1,46 @@
+{
+  "app": {
+    "title": "Help Desk",
+    "login": "Login",
+    "logout": "Logout"
+  },
+  "nav": {
+    "groups": "Groups",
+    "staffDirectory": "Staff Directory",
+    "documents": "Documents"
+  },
+  "auth": {
+    "enterPhone": "Enter your phone number or email",
+    "sendOtp": "Send OTP",
+    "enterOtp": "Enter the OTP code",
+    "verify": "Verify",
+    "invalidCode": "Invalid code. Please try again."
+  },
+  "groups": {
+    "create": "Create Group",
+    "name": "Group Name",
+    "type": "Group Type",
+    "internal": "Internal",
+    "bank": "Bank",
+    "members": "Members",
+    "addMember": "Add Member",
+    "settings": "Settings"
+  },
+  "chat": {
+    "typeMessage": "Type a message...",
+    "send": "Send",
+    "search": "Search messages..."
+  },
+  "staff": {
+    "search": "Search employees...",
+    "noResults": "No employees found"
+  },
+  "documents": {
+    "upload": "Upload Document",
+    "dragDrop": "Drag and drop or click to upload",
+    "visibility": "Visibility",
+    "all": "All Members",
+    "restricted": "Restricted",
+    "password": "Password Protection"
+  }
+}
