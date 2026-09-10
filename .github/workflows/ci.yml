@@ -21,7 +21,7 @@ jobs:
         run: go mod download
       - name: Verify sqlc-generated code is up to date
         run: |
-          go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.25.0
           sqlc diff
       - name: Lint
         run: |
