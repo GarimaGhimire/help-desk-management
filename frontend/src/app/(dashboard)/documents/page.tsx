@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useI18n } from "@/lib/i18n";
 import { api, getAuthUser } from "@/lib/api";
+import { DocumentSkeleton } from "@/components/ui/skeleton";
 
 type VisibilityType = "all" | "admins" | "restricted" | "custom";
 
@@ -515,7 +516,11 @@ export default function DocumentsPage() {
         </div>
 
         {loading ? (
-          <div className="p-12 text-center text-sm text-surface-500">Loading documents...</div>
+          <div className="divide-y divide-surface-100">
+            {[1, 2, 3, 4].map((i) => (
+              <DocumentSkeleton key={i} />
+            ))}
+          </div>
         ) : filteredDocs.length === 0 ? (
           <div className="p-12 text-center space-y-2">
             <div className="text-3xl">📁</div>

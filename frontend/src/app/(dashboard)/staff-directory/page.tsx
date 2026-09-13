@@ -4,6 +4,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useI18n } from "@/lib/i18n";
 import { api, getAuthUser } from "@/lib/api";
+import { StaffSkeleton } from "@/components/ui/skeleton";
 
 interface Employee {
   id: string;
@@ -292,12 +293,9 @@ export default function StaffDirectoryPage() {
       )}
 
       {loading && (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="h-20 rounded-xl bg-white border border-surface-200 animate-pulse"
-            />
+        <div className="space-y-2.5">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <StaffSkeleton key={i} />
           ))}
         </div>
       )}

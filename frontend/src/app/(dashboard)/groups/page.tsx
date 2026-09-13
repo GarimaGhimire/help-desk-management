@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { api, getAuthUser, homeForRole } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
+import { GroupSkeleton } from "@/components/ui/skeleton";
 
 interface Group {
   id: string;
@@ -70,8 +71,8 @@ export default function GroupsPage() {
 
       {loading ? (
         <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {[1, 2, 3].map((i) => (
-            <div key={i} className="h-28 rounded-xl bg-white border border-surface-200 animate-pulse" />
+          {[1, 2, 3, 4, 5, 6].map((i) => (
+            <GroupSkeleton key={i} />
           ))}
         </div>
       ) : groups.length === 0 ? (
