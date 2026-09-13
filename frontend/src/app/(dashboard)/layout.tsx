@@ -50,7 +50,7 @@ export default function DashboardLayout({
   const locale = (cookieStore.get("lang")?.value === "ne" ? "ne" : "en") as Locale;
   const t = translations[locale];
 
-  const isSuperadmin = decodeRole(token) === "superadmin";
+  const isSuperadmin = token ? decodeRole(token) === "superadmin" : false;
   const items = allNavItems
     .filter(({ href }) => (isSuperadmin ? href === "/admin" : href !== "/admin"))
     .map(({ href, icon, labelKey }) => ({ href, icon, label: t.nav[labelKey] }));
