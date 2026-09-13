@@ -109,9 +109,11 @@ CREATE TABLE messages (
 CREATE TABLE documents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     uploaded_by UUID NOT NULL REFERENCES users(id),
+    org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
     group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
     filename VARCHAR(500) NOT NULL,
     storage_path VARCHAR(1000) NOT NULL,
+    file_size BIGINT NOT NULL DEFAULT 0,
     visibility doc_visibility NOT NULL DEFAULT 'all',
     password_hash VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

@@ -88,6 +88,7 @@ func main() {
 
 	r.Mount("/auth", auth.Handlers(repos, mail))
 	r.Mount("/avatars", profile.AvatarHandler())
+	r.Mount("/documents/files", documents.DocumentFileHandler())
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(repos))
 		r.Mount("/me", profile.Handlers(repos))

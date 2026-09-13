@@ -1,0 +1,5 @@
+ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS org_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    ADD COLUMN IF NOT EXISTS file_size BIGINT NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_documents_org ON documents(org_id);
