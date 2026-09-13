@@ -75,7 +75,8 @@ func (c *Client) readPump() {
 		}
 
 		var incoming struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			ReplyToID string `json:"replyToId"`
 		}
 		if err := json.Unmarshal(data, &incoming); err != nil || strings.TrimSpace(incoming.Content) == "" {
 			c.sendJSON(map[string]string{"error": "invalid message format"})
@@ -92,12 +93,17 @@ func (c *Client) readPump() {
 			continue
 		}
 
-		saved, err := c.repos.Queries.CreateMessage(context.Background(), sqldb.CreateMessageParams{
+		params := sqldb.CreateMessageParams{
 			GroupID:    uuidFromString(c.groupID),
 			SenderID:   uuidFromString(c.userID),
 			ReceiverID: pgtype.UUID{},
 			Content:    strings.TrimSpace(incoming.Content),
-		})
+		}
+		if strings.TrimSpace(incoming.ReplyToID) != "" {
+			params.ReplyToID = uuidFromString(incoming.ReplyToID)
+		}
+
+		saved, err := c.repos.Queries.CreateMessage(context.Background(), params)
 		if err != nil {
 			log.Printf("create message failed: %v", err)
 			c.sendJSON(map[string]string{"error": "failed to send message"})
@@ -105,7 +111,8 @@ func (c *Client) readPump() {
 		}
 
 		sender := c.senderInfo()
-		payload, _ := json.Marshal(map[string]interface{}{
+		msgPayload := map[string]interface{}{
+			"type":         "chat",
 			"id":           saved.ID,
 			"groupId":      c.groupID,
 			"senderId":     userIDString(saved.SenderID),
@@ -114,8 +121,26 @@ func (c *Client) readPump() {
 			"senderName":   sender.name,
 			"senderAvatar": sender.avatar,
 			"senderRole":   sender.role,
-		})
+		}
 
+		if saved.ReplyToID.Valid {
+			if repliedMsg, err := c.repos.Queries.GetMessageByID(context.Background(), saved.ReplyToID); err == nil {
+				replySenderName := "User"
+				if ru, err := c.repos.Queries.GetUserByID(context.Background(), repliedMsg.SenderID); err == nil {
+					replySenderName = ru.Name
+					if ru.DisplayName.Valid && ru.DisplayName.String != "" {
+						replySenderName = ru.DisplayName.String
+					}
+				}
+				msgPayload["replyTo"] = map[string]string{
+					"id":         userIDString(repliedMsg.ID),
+					"senderName": replySenderName,
+					"content":    repliedMsg.Content,
+				}
+			}
+		}
+
+		payload, _ := json.Marshal(msgPayload)
 		c.hub.broadcast <- &BroadcastMsg{groupID: c.groupID, data: payload}
 	}
 }
@@ -277,8 +302,316 @@ func Handlers(repos *db.Repos) chi.Router {
 	r.Post("/upload", uploadAttachment(repos))
 	r.Get("/ws", handleWebSocket(repos))
 	r.Get("/search", searchMessages(repos))
+	r.Post("/forward", forwardMessage(repos))
 	r.Get("/{groupId}", listMessages(repos))
+	r.Patch("/{id}", editMessage(repos))
+	r.Delete("/{id}", deleteMessage(repos))
 	return r
+}
+
+func editMessage(repos *db.Repos) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := middleware.GetUser(r)
+		if me == nil {
+			middleware.RespondError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		msgID := chi.URLParam(r, "id")
+		if msgID == "" {
+			middleware.RespondError(w, http.StatusBadRequest, "message id required")
+			return
+		}
+
+		var req struct {
+			Content string `json:"content"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Content) == "" {
+			middleware.RespondError(w, http.StatusBadRequest, "content is required")
+			return
+		}
+
+		existing, err := repos.Queries.GetMessageByID(r.Context(), uuidFromString(msgID))
+		if err != nil {
+			middleware.RespondError(w, http.StatusNotFound, "message not found")
+			return
+		}
+
+		if userIDString(existing.SenderID) != me.ID {
+			middleware.RespondError(w, http.StatusForbidden, "you can only edit your own messages")
+			return
+		}
+
+		updated, err := repos.Queries.UpdateMessage(r.Context(), sqldb.UpdateMessageParams{
+			ID:      uuidFromString(msgID),
+			Content: strings.TrimSpace(req.Content),
+		})
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to update message")
+			return
+		}
+
+		groupIDStr := userIDString(existing.GroupID)
+		editedAtStr := updated.EditedAt.Time.Format(time.RFC3339)
+
+		payload, _ := json.Marshal(map[string]interface{}{
+			"type":     "edit",
+			"id":       msgID,
+			"groupId":  groupIDStr,
+			"content":  updated.Content,
+			"editedAt": editedAtStr,
+		})
+		messageHub.broadcast <- &BroadcastMsg{groupID: groupIDStr, data: payload}
+
+		middleware.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"id":       msgID,
+			"content":  updated.Content,
+			"editedAt": editedAtStr,
+		})
+	}
+}
+
+func deleteMessage(repos *db.Repos) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := middleware.GetUser(r)
+		if me == nil {
+			middleware.RespondError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		msgID := chi.URLParam(r, "id")
+		if msgID == "" {
+			middleware.RespondError(w, http.StatusBadRequest, "message id required")
+			return
+		}
+
+		existing, err := repos.Queries.GetMessageByID(r.Context(), uuidFromString(msgID))
+		if err != nil {
+			middleware.RespondError(w, http.StatusNotFound, "message not found")
+			return
+		}
+
+		isSender := userIDString(existing.SenderID) == me.ID
+		isAdmin := me.Role == "org_admin" || me.Role == "staff_admin" || me.Role == "superadmin"
+
+		if !isSender && !isAdmin {
+			middleware.RespondError(w, http.StatusForbidden, "insufficient permissions to delete message")
+			return
+		}
+
+		deletedContent := "🚫 Original message was deleted"
+		updated, err := repos.Queries.UpdateMessage(r.Context(), sqldb.UpdateMessageParams{
+			ID:      uuidFromString(msgID),
+			Content: deletedContent,
+		})
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to delete message")
+			return
+		}
+
+		groupIDStr := userIDString(existing.GroupID)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"type":      "delete",
+			"id":        msgID,
+			"groupId":   groupIDStr,
+			"content":   updated.Content,
+			"isDeleted": true,
+		})
+		messageHub.broadcast <- &BroadcastMsg{groupID: groupIDStr, data: payload}
+
+		middleware.RespondJSON(w, http.StatusOK, map[string]interface{}{
+			"id":        msgID,
+			"content":   updated.Content,
+			"isDeleted": true,
+		})
+	}
+}
+
+func forwardMessage(repos *db.Repos) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := middleware.GetUser(r)
+		if me == nil {
+			middleware.RespondError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		var req struct {
+			MessageID      string   `json:"messageId"`
+			TargetGroupIDs []string `json:"targetGroupIds"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.MessageID == "" || len(req.TargetGroupIDs) == 0 {
+			middleware.RespondError(w, http.StatusBadRequest, "messageId and targetGroupIds required")
+			return
+		}
+
+		original, err := repos.Queries.GetMessageByID(r.Context(), uuidFromString(req.MessageID))
+		if err != nil {
+			middleware.RespondError(w, http.StatusNotFound, "original message not found")
+			return
+		}
+
+		var sender struct{ name, avatar, role string }
+		if u, err := repos.Queries.GetUserByID(r.Context(), db.ParseUUID(me.ID)); err == nil {
+			sender.name = u.Name
+			if u.DisplayName.Valid && u.DisplayName.String != "" {
+				sender.name = u.DisplayName.String
+			}
+			if u.AvatarUrl.Valid {
+				sender.avatar = u.AvatarUrl.String
+			}
+			sender.role = string(u.Role)
+		}
+
+		for _, targetGID := range req.TargetGroupIDs {
+			groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, targetGID)
+			if !groupAccess {
+				continue
+			}
+
+			saved, err := repos.Queries.CreateMessage(r.Context(), sqldb.CreateMessageParams{
+				GroupID:    uuidFromString(targetGID),
+				SenderID:   uuidFromString(me.ID),
+				ReceiverID: pgtype.UUID{},
+				Content:    original.Content,
+			})
+			if err != nil {
+				continue
+			}
+
+			payload, _ := json.Marshal(map[string]interface{}{
+				"type":         "chat",
+				"id":           saved.ID,
+				"groupId":      targetGID,
+				"senderId":     me.ID,
+				"content":      saved.Content,
+				"createdAt":    saved.CreatedAt.Time.Format(time.RFC3339),
+				"senderName":   sender.name,
+				"senderAvatar": sender.avatar,
+				"senderRole":   sender.role,
+			})
+			messageHub.broadcast <- &BroadcastMsg{groupID: targetGID, data: payload}
+		}
+
+		middleware.RespondJSON(w, http.StatusOK, map[string]string{"message": "forwarded"})
+	}
+}
+
+func listMessages(repos *db.Repos) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		groupID := chi.URLParam(r, "groupId")
+
+		me := middleware.GetUser(r)
+		groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, groupID)
+		if !groupAccess {
+			middleware.RespondError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
+		limit := 50
+		if l := r.URL.Query().Get("limit"); l != "" {
+			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
+				limit = parsed
+			}
+		}
+
+		var before pgtype.Timestamptz
+		if b := r.URL.Query().Get("before"); b != "" {
+			before.Scan(b)
+		}
+
+		rows, err := repos.Queries.ListGroupMessages(r.Context(), sqldb.ListGroupMessagesParams{
+			GroupID: uuidFromString(groupID),
+			Column2: before,
+			Limit:   int32(limit),
+		})
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to load messages")
+			return
+		}
+
+		out := make([]map[string]interface{}, 0, len(rows))
+		for i := len(rows) - 1; i >= 0; i-- {
+			m := rows[i]
+			item := map[string]interface{}{
+				"id":           m.ID,
+				"groupId":      m.GroupID,
+				"senderId":     userIDString(m.SenderID),
+				"content":      m.Content,
+				"createdAt":    m.CreatedAt.Time.Format(time.RFC3339),
+				"senderName":   m.SenderName,
+				"senderAvatar": senderAvatarString(m.SenderAvatar),
+				"senderRole":   m.SenderRole,
+			}
+			if m.ReplyToID.Valid {
+				item["replyTo"] = map[string]string{
+					"id":         userIDString(m.ReplyToID),
+					"senderName": m.ReplySenderName.String,
+					"content":    m.ReplyContent.String,
+				}
+			}
+			if m.EditedAt.Valid {
+				item["editedAt"] = m.EditedAt.Time.Format(time.RFC3339)
+			}
+			out = append(out, item)
+		}
+
+		middleware.RespondJSON(w, http.StatusOK, out)
+	}
+}
+
+func searchMessages(repos *db.Repos) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		groupID := r.URL.Query().Get("groupId")
+		query := strings.TrimSpace(r.URL.Query().Get("q"))
+		if groupID == "" || query == "" {
+			middleware.RespondError(w, http.StatusBadRequest, "groupId and q are required")
+			return
+		}
+
+		me := middleware.GetUser(r)
+		groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, groupID)
+		if !groupAccess {
+			middleware.RespondError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
+		rows, err := repos.Queries.SearchMessagesInGroup(r.Context(), sqldb.SearchMessagesInGroupParams{
+			GroupID:        uuidFromString(groupID),
+			PlaintoTsquery: query,
+			Limit:          50,
+		})
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "search failed")
+			return
+		}
+
+		out := make([]map[string]interface{}, 0, len(rows))
+		for _, m := range rows {
+			item := map[string]interface{}{
+				"id":           m.ID,
+				"groupId":      m.GroupID,
+				"senderId":     userIDString(m.SenderID),
+				"content":      m.Content,
+				"createdAt":    m.CreatedAt.Time.Format(time.RFC3339),
+				"senderName":   m.SenderName,
+				"senderAvatar": senderAvatarString(m.SenderAvatar),
+				"senderRole":   m.SenderRole,
+			}
+			if m.ReplyToID.Valid {
+				item["replyTo"] = map[string]string{
+					"id":         userIDString(m.ReplyToID),
+					"senderName": m.ReplySenderName.String,
+					"content":    m.ReplyContent.String,
+				}
+			}
+			if m.EditedAt.Valid {
+				item["editedAt"] = m.EditedAt.Time.Format(time.RFC3339)
+			}
+			out = append(out, item)
+		}
+
+		middleware.RespondJSON(w, http.StatusOK, out)
+	}
 }
 
 func uploadAttachment(repos *db.Repos) http.HandlerFunc {
@@ -408,98 +741,4 @@ func handleWebSocket(repos *db.Repos) http.HandlerFunc {
 	}
 }
 
-func listMessages(repos *db.Repos) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		groupID := chi.URLParam(r, "groupId")
 
-		me := middleware.GetUser(r)
-		groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, groupID)
-		if !groupAccess {
-			middleware.RespondError(w, http.StatusNotFound, "group not found")
-			return
-		}
-
-		limit := 50
-		if l := r.URL.Query().Get("limit"); l != "" {
-			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
-				limit = parsed
-			}
-		}
-
-		var before pgtype.Timestamptz
-		if b := r.URL.Query().Get("before"); b != "" {
-			before.Scan(b)
-		}
-
-		rows, err := repos.Queries.ListGroupMessages(r.Context(), sqldb.ListGroupMessagesParams{
-			GroupID: uuidFromString(groupID),
-			Column2: before,
-			Limit:   int32(limit),
-		})
-		if err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to load messages")
-			return
-		}
-
-		out := make([]map[string]interface{}, 0, len(rows))
-		for i := len(rows) - 1; i >= 0; i-- {
-			m := rows[i]
-			out = append(out, map[string]interface{}{
-				"id":           m.ID,
-				"groupId":      m.GroupID,
-				"senderId":     userIDString(m.SenderID),
-				"content":      m.Content,
-				"createdAt":    m.CreatedAt.Time.Format(time.RFC3339),
-				"senderName":   m.SenderName,
-				"senderAvatar": senderAvatarString(m.SenderAvatar),
-				"senderRole":   m.SenderRole,
-			})
-		}
-
-		middleware.RespondJSON(w, http.StatusOK, out)
-	}
-}
-
-func searchMessages(repos *db.Repos) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		groupID := r.URL.Query().Get("groupId")
-		query := strings.TrimSpace(r.URL.Query().Get("q"))
-		if groupID == "" || query == "" {
-			middleware.RespondError(w, http.StatusBadRequest, "groupId and q are required")
-			return
-		}
-
-		me := middleware.GetUser(r)
-		groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, groupID)
-		if !groupAccess {
-			middleware.RespondError(w, http.StatusNotFound, "group not found")
-			return
-		}
-
-		rows, err := repos.Queries.SearchMessagesInGroup(r.Context(), sqldb.SearchMessagesInGroupParams{
-			GroupID:        uuidFromString(groupID),
-			PlaintoTsquery: query,
-			Limit:          50,
-		})
-		if err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "search failed")
-			return
-		}
-
-		out := make([]map[string]interface{}, 0, len(rows))
-		for _, m := range rows {
-			out = append(out, map[string]interface{}{
-				"id":           m.ID,
-				"groupId":      m.GroupID,
-				"senderId":     userIDString(m.SenderID),
-				"content":      m.Content,
-				"createdAt":    m.CreatedAt.Time.Format(time.RFC3339),
-				"senderName":   m.SenderName,
-				"senderAvatar": senderAvatarString(m.SenderAvatar),
-				"senderRole":   m.SenderRole,
-			})
-		}
-
-		middleware.RespondJSON(w, http.StatusOK, out)
-	}
-}

@@ -38,7 +38,8 @@ export type Profile = {
   must_change_password: boolean;
   created_at: string;
   last_login_at?: string;
-  org?: { id: string; name: string; slug: string } | null;
+  org_suspended?: boolean;
+  org?: { id: string; name: string; slug: string; is_active?: boolean } | null;
 };
 
 export function roleLabelKey(role: string): string {

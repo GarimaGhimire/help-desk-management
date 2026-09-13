@@ -290,9 +290,13 @@ func respondProfile(w http.ResponseWriter, s *Service, r *http.Request, me *midd
 	if me.OrgID != "" {
 		if org, err := s.repos.Queries.GetOrganization(r.Context(), db.ParseUUID(me.OrgID)); err == nil {
 			resp["org"] = map[string]interface{}{
-				"id":   db.UUIDString(org.ID),
-				"name": org.Name,
-				"slug": org.Slug,
+				"id":        db.UUIDString(org.ID),
+				"name":      org.Name,
+				"slug":      org.Slug,
+				"is_active": org.IsActive,
+			}
+			if !org.IsActive {
+				resp["org_suspended"] = true
 			}
 		}
 	}

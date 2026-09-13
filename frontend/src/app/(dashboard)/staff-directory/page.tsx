@@ -232,12 +232,6 @@ export default function StaffDirectoryPage() {
           {canCreateStaff && (
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setRoleModalOpen(true)}
-                className="px-3 py-1.5 rounded-lg border border-surface-200 bg-white text-surface-700 text-xs font-medium hover:bg-surface-50 transition-colors"
-              >
-                + New Custom Role
-              </button>
-              <button
                 onClick={() => setPositionModalOpen(true)}
                 className="px-3 py-1.5 rounded-lg border border-surface-200 bg-white text-surface-700 text-xs font-medium hover:bg-surface-50 transition-colors"
               >
@@ -254,29 +248,17 @@ export default function StaffDirectoryPage() {
         </div>
       </div>
 
-      {/* Roles & Positions Tags Banner */}
-      {(customRoles.length > 0 || positions.length > 0) && (
+      {/* Positions Tags Banner */}
+      {positions.length > 0 && (
         <div className="mb-6 p-4 bg-surface-50 border border-surface-200 rounded-xl space-y-2">
-          {customRoles.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-semibold text-surface-500">Custom Roles:</span>
-              {customRoles.map((r) => (
-                <span key={r.id} className="text-xs px-2.5 py-1 rounded-full bg-primary-100 text-primary-800 font-medium">
-                  {r.name}
-                </span>
-              ))}
-            </div>
-          )}
-          {positions.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs font-semibold text-surface-500">Positions:</span>
-              {positions.map((p) => (
-                <span key={p.id} className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-medium">
-                  {p.name}
-                </span>
-              ))}
-            </div>
-          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-semibold text-surface-500">Positions:</span>
+            {positions.map((p) => (
+              <span key={p.id} className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-medium">
+                {p.name}
+              </span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -390,56 +372,6 @@ export default function StaffDirectoryPage() {
       {staffSuccess && (
         <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 animate-fade-in">
           Staff account created successfully
-        </div>
-      )}
-
-      {/* Modal: Create Custom Role */}
-      {roleModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/30" onClick={() => !creatingItem && setRoleModalOpen(false)} />
-          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
-            <h3 className="text-base font-semibold text-surface-900 mb-1">Create Custom Role</h3>
-            <p className="text-xs text-surface-500 mb-4">Define a new custom role for your organization staff.</p>
-            <form onSubmit={handleCreateRole}>
-              <div className="space-y-3 mb-4">
-                <div>
-                  <label className="block text-xs font-medium text-surface-500 mb-1">Role Name</label>
-                  <input
-                    value={newRoleName}
-                    onChange={(e) => setNewRoleName(e.target.value)}
-                    placeholder="e.g. Senior Support Agent"
-                    className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-surface-500 mb-1">Description (Optional)</label>
-                  <input
-                    value={newRoleDesc}
-                    onChange={(e) => setNewRoleDesc(e.target.value)}
-                    placeholder="e.g. Handles Tier 2 escalations"
-                    className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                  />
-                </div>
-              </div>
-              {modalItemError && <div className="mb-3 text-xs text-red-600">{modalItemError}</div>}
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={creatingItem || !newRoleName.trim()}
-                  className="flex-1 py-2 rounded-lg bg-primary-600 text-white text-xs font-medium hover:bg-primary-700 disabled:opacity-50"
-                >
-                  {creatingItem ? "Saving..." : "Create Role"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setRoleModalOpen(false)}
-                  className="px-4 py-2 rounded-lg border border-surface-200 text-xs text-surface-600 hover:bg-surface-50"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
-          </div>
         </div>
       )}
 

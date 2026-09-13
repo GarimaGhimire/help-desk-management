@@ -13,9 +13,16 @@ interface Message {
   senderId: string;
   content: string;
   createdAt: string;
+  editedAt?: string;
+  isDeleted?: boolean;
   senderName?: string;
   senderAvatar?: string;
   senderRole?: string;
+  replyTo?: {
+    id: string;
+    senderName: string;
+    content: string;
+  };
 }
 
 function formatTime(iso: string): string {
@@ -51,6 +58,11 @@ interface UserOption {
   role: string;
 }
 
+interface UserGroup {
+  id: string;
+  name: string;
+}
+
 export default function ChatPage() {
   const { id } = useParams<{ id: string }>();
   const { t } = useI18n();
@@ -65,6 +77,24 @@ export default function ChatPage() {
   const myId = getCurrentUserId();
   const [userRole, setUserRole] = useState<string | null>(null);
 
+  // Message actions states (Reply, Edit, Forward, Delete)
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState("");
+
+  // Custom Delete Modal State
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [targetDeleteId, setTargetDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  // Forward Modal State
+  const [forwardModalOpen, setForwardModalOpen] = useState(false);
+  const [forwardMessageId, setForwardMessageId] = useState<string | null>(null);
+  const [availableGroups, setAvailableGroups] = useState<UserGroup[]>([]);
+  const [selectedTargetGroupIds, setSelectedTargetGroupIds] = useState<string[]>([]);
+  const [forwarding, setForwarding] = useState(false);
+  const [forwardError, setForwardError] = useState("");
+
   // Group members management state
   const [membersModalOpen, setMembersModalOpen] = useState(false);
   const [members, setMembers] = useState<GroupMember[]>([]);
@@ -74,9 +104,14 @@ export default function ChatPage() {
   const [addingMember, setAddingMember] = useState(false);
   const [memberError, setMemberError] = useState("");
 
+  const [groupName, setGroupName] = useState<string>("");
+
   useEffect(() => {
     setUserRole(getAuthUser()?.role || null);
-  }, []);
+    api.get<{ id: string; name: string }>(`/groups/${id}`)
+      .then((g) => setGroupName(g.name))
+      .catch(() => {});
+  }, [id]);
 
   const fetchMembers = useCallback(async () => {
     setLoadingMembers(true);
@@ -134,22 +169,48 @@ export default function ChatPage() {
     }
   };
 
+  // Real-time WebSocket Handler for new messages, edits, & soft deletions
   const onMessage = useCallback((data: unknown) => {
-    const m = data as Message;
-    // Server-enforced anti-spam feedback.
-    if (m && "error" in m && (m as { error?: string }).error === "slow_down") {
-      const retry = Number((m as { retry_after?: number }).retry_after) || 1;
+    const payload = data as any;
+    if (!payload) return;
+
+    if (payload.error === "slow_down") {
+      const retry = Number(payload.retry_after) || 1;
       const remaining = Math.max(retry, 1);
       cooldownUntil.current = Date.now() + remaining * 1000;
       setCooldownTotal(remaining);
       setCooldown(remaining);
       return;
     }
-    if (!m?.content) return;
-    setMessages((prev) => {
-      if (prev.some((p) => p.id === m.id)) return prev;
-      return [...prev, m];
-    });
+
+    if (payload.type === "edit") {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === payload.id
+            ? { ...m, content: payload.content, editedAt: payload.editedAt }
+            : m
+        )
+      );
+      return;
+    }
+
+    if (payload.type === "delete") {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === payload.id
+            ? { ...m, content: payload.content || "🚫 Original message was deleted", isDeleted: true }
+            : m
+        )
+      );
+      return;
+    }
+
+    if (payload.content || payload.type === "chat") {
+      setMessages((prev) => {
+        if (prev.some((p) => p.id === payload.id)) return prev;
+        return [...prev, payload];
+      });
+    }
   }, []);
 
   const { isConnected, send } = useWebSocket(`/messages/ws?groupId=${id}`, { onMessage });
@@ -244,7 +305,6 @@ export default function ChatPage() {
     setPendingAttachments((prev) => prev.filter((_, i) => i !== index));
   };
 
-  // Handle paste files
   const handlePaste = (e: React.ClipboardEvent) => {
     if (e.clipboardData.files && e.clipboardData.files.length > 0) {
       e.preventDefault();
@@ -252,7 +312,6 @@ export default function ChatPage() {
     }
   };
 
-  // Drag and drop handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDraggingModal(true);
@@ -285,10 +344,97 @@ export default function ChatPage() {
       content = content ? `${content}\n\n${attachmentText}` : attachmentText;
     }
 
-    send({ groupId: id, content });
+    const payload: { groupId: string; content: string; replyToId?: string } = {
+      groupId: id,
+      content,
+    };
+    if (replyingTo) {
+      payload.replyToId = replyingTo.id;
+    }
+
+    send(payload);
     setInput("");
     setPendingAttachments([]);
+    setReplyingTo(null);
     inputRef.current?.focus();
+  };
+
+  // Edit Message Handler
+  const startEditing = (m: Message) => {
+    setEditingMessageId(m.id);
+    setEditingContent(m.content);
+  };
+
+  const saveEdit = async (msgId: string) => {
+    if (!editingContent.trim()) return;
+    try {
+      await api.patch(`/messages/${msgId}`, { content: editingContent.trim() });
+      setEditingMessageId(null);
+      setEditingContent("");
+    } catch {
+      alert("Failed to edit message");
+    }
+  };
+
+  // Custom Delete Modal Trigger & Action
+  const promptDeleteMessage = (msgId: string) => {
+    setTargetDeleteId(msgId);
+    setDeleteModalOpen(true);
+  };
+
+  const confirmDeleteMessage = async () => {
+    if (!targetDeleteId) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/messages/${targetDeleteId}`);
+      setDeleteModalOpen(false);
+      setTargetDeleteId(null);
+    } catch {
+      alert("Failed to delete message");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // Forward Message Handlers
+  const openForwardModal = async (msgId: string) => {
+    setForwardMessageId(msgId);
+    setForwardModalOpen(true);
+    setSelectedTargetGroupIds([]);
+    setForwardError("");
+    try {
+      const groups = await api.get<UserGroup[]>("/groups");
+      setAvailableGroups(groups.filter((g) => g.id !== id));
+    } catch {
+      setForwardError("Failed to load chat groups.");
+    }
+  };
+
+  const handleForwardSubmit = async () => {
+    if (!forwardMessageId || selectedTargetGroupIds.length === 0) return;
+    setForwarding(true);
+    setForwardError("");
+    try {
+      await api.post("/messages/forward", {
+        messageId: forwardMessageId,
+        targetGroupIds: selectedTargetGroupIds,
+      });
+      setForwardModalOpen(false);
+      setForwardMessageId(null);
+    } catch (err) {
+      setForwardError(err instanceof Error ? err.message : "Failed to forward message");
+    } finally {
+      setForwarding(false);
+    }
+  };
+
+  const scrollToMessage = (msgId: string) => {
+    const el = document.getElementById(`msg-${msgId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("bg-emerald-50/80", "transition-colors");
+      setTimeout(() => el.classList.remove("bg-emerald-50/80"), 1500);
+    }
   };
 
   return (
@@ -309,7 +455,9 @@ export default function ChatPage() {
       )}
 
       <header className="flex items-center justify-between mb-4">
-        <h1 className="text-lg font-semibold text-surface-900">Group Chat</h1>
+        <h1 className="text-lg font-bold text-surface-900 flex items-center gap-2">
+          <span>{groupName || "Group Chat"}</span>
+        </h1>
         <div className="flex items-center gap-3">
           {userRole === "org_admin" && (
             <button
@@ -333,7 +481,7 @@ export default function ChatPage() {
 
       <div
         ref={listRef}
-        className="flex-1 overflow-y-auto mb-4 px-1 py-6 bg-white rounded-2xl border border-surface-200 shadow-card"
+        className="flex-1 overflow-y-auto mb-4 px-1 py-6 bg-white rounded-2xl border border-surface-200 shadow-card space-y-3"
       >
         {loading && (
           <div className="space-y-4 px-3">
@@ -361,8 +509,11 @@ export default function ChatPage() {
           messages.length > 0 &&
           messages.map((m, i) => {
             const mine = m.senderId === myId;
+            const canManageMsg = mine || userRole === "org_admin" || userRole === "staff_admin" || userRole === "superadmin";
             const name = mine ? "You" : m.senderName || `Staff ${m.senderId.slice(0, 4)}`;
             const src = mine ? null : assetUrl(m.senderAvatar || null);
+            const isDeletedMsg = m.isDeleted || m.content.startsWith("🚫") || m.content.includes("Original message was deleted");
+
             const showDate =
               i === 0 ||
               new Date(m.createdAt).toDateString() !==
@@ -370,8 +521,16 @@ export default function ChatPage() {
             const showHeader =
               !mine && (i === 0 || messages[i - 1].senderId !== m.senderId);
 
-            // Render message text and attached media/images/files
             const renderMessageContent = (text: string) => {
+              if (isDeletedMsg) {
+                return (
+                  <div className="flex items-center gap-1.5 italic text-surface-400 select-none py-0.5">
+                    <span className="text-sm shrink-0">🚫</span>
+                    <span>Original message was deleted</span>
+                  </div>
+                );
+              }
+
               const lines = text.split("\n");
               return lines.map((line, idx) => {
                 const imgMatch = line.match(/^!\[(.*?)\]\((.*?)\)$/);
@@ -419,7 +578,7 @@ export default function ChatPage() {
             };
 
             return (
-              <div key={m.id || i}>
+              <div key={m.id || i} id={`msg-${m.id}`} className="group relative transition-all rounded-xl p-0.5">
                 {showDate && (
                   <div className="flex justify-center my-5">
                     <span className="text-[11px] px-3 py-1 rounded-full bg-surface-100 border border-surface-100 text-surface-500">
@@ -428,40 +587,162 @@ export default function ChatPage() {
                   </div>
                 )}
 
-                {mine ? (
-                  <div className="flex justify-end px-3 mb-1.5">
-                    <div className="max-w-[70%] flex flex-col items-end">
-                      <div className="px-4 py-2.5 rounded-2xl rounded-br-md bg-primary-600 text-white text-sm leading-relaxed shadow-sm">
-                        {renderMessageContent(m.content)}
-                        <span className="block text-[10px] mt-1 text-primary-200">
-                          {formatTime(m.createdAt)}
-                        </span>
+                <div className={`flex items-start gap-2 ${mine ? "justify-end" : "justify-start"}`}>
+                  {!mine && <Avatar src={src} name={name} size="sm" className="mt-1 shrink-0" />}
+
+                  <div className={`max-w-[75%] flex flex-col ${mine ? "items-end" : "items-start"} min-w-0 relative`}>
+                    {!mine && showHeader && (
+                      <span className="text-xs font-semibold text-surface-600 mb-1 ml-1">
+                        {name}
+                        {m.senderRole && m.senderRole !== "org_member" ? (
+                          <span className="text-[10px] font-medium text-surface-400 normal-case ml-1.5">
+                            • {m.senderRole.replace("_", " ")}
+                          </span>
+                        ) : null}
+                      </span>
+                    )}
+
+                    {/* WhatsApp Hover Action Menu (Hidden for soft-deleted messages) */}
+                    {!isDeletedMsg && (
+                      <div
+                        className={`absolute top-0 -translate-y-2 flex items-center gap-1 bg-white border border-surface-200 shadow-md rounded-lg px-1.5 py-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity ${
+                          mine ? "right-full mr-2" : "left-full ml-2"
+                        }`}
+                      >
+                        <button
+                          onClick={() => setReplyingTo(m)}
+                          className="p-1 text-surface-500 hover:text-emerald-600 hover:bg-surface-100 rounded transition-colors"
+                          title="Reply"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 016 6v3" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => openForwardModal(m.id)}
+                          className="p-1 text-surface-500 hover:text-blue-600 hover:bg-surface-100 rounded transition-colors"
+                          title="Forward"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 15l6-6m0 0l-6-6m6 6H9a6 6 0 00-6 6v3" />
+                          </svg>
+                        </button>
+                        {mine && (
+                          <button
+                            onClick={() => startEditing(m)}
+                            className="p-1 text-surface-500 hover:text-primary-600 hover:bg-surface-100 rounded transition-colors"
+                            title="Edit"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                            </svg>
+                          </button>
+                        )}
+                        {canManageMsg && (
+                          <button
+                            onClick={() => promptDeleteMessage(m.id)}
+                            className="p-1 text-surface-500 hover:text-red-600 hover:bg-surface-100 rounded transition-colors"
+                            title="Delete"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                            </svg>
+                          </button>
+                        )}
                       </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex justify-start px-3 mb-1.5 gap-2.5">
-                    <Avatar src={src} name={name} size="sm" className="mt-0.5" />
-                    <div className="max-w-[70%] flex flex-col items-start min-w-0">
-                      {showHeader && (
-                        <span className="text-xs font-semibold text-surface-600 mb-1 ml-1">
-                          {name}
-                          {m.senderRole && m.senderRole !== "org_member" ? (
-                            <span className="text-[10px] font-medium text-surface-400 normal-case ml-1.5">
-                              • {m.senderRole.replace("_", " ")}
-                            </span>
-                          ) : null}
-                        </span>
+                    )}
+
+                    {/* Chat Bubble Container */}
+                    <div
+                      className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-xs relative ${
+                        isDeletedMsg
+                          ? "bg-surface-100 text-surface-500 border border-surface-200/60 rounded-xl"
+                          : mine
+                          ? "rounded-br-md bg-primary-600 text-white"
+                          : "rounded-bl-md bg-white text-surface-800 border border-surface-200"
+                      }`}
+                    >
+                      {/* WhatsApp Quoted Reply Preview Inside Bubble */}
+                      {m.replyTo && !isDeletedMsg && (
+                        <div
+                          onClick={() => m.replyTo?.id && scrollToMessage(m.replyTo.id)}
+                          className={`mb-2 p-2 rounded-lg border-l-4 text-xs cursor-pointer transition-all ${
+                            mine
+                              ? "bg-black/20 border-emerald-300 text-white/90 hover:bg-black/30"
+                              : "bg-surface-50 border-emerald-500 text-surface-700 hover:bg-surface-100"
+                          }`}
+                        >
+                          <p className={`font-semibold ${mine ? "text-emerald-200" : "text-emerald-700"}`}>
+                            {m.replyTo.senderName}
+                          </p>
+                          <p className="line-clamp-1 opacity-90">{m.replyTo.content}</p>
+                        </div>
                       )}
-                      <div className="px-4 py-2.5 rounded-2xl rounded-bl-md bg-white text-surface-800 border border-surface-200 text-sm leading-relaxed">
-                        {renderMessageContent(m.content)}
-                        <span className="block text-[10px] mt-1 text-surface-400">
-                          {formatTime(m.createdAt)}
-                        </span>
-                      </div>
+
+                      {/* Message Content or Enhanced Inline Edit Box */}
+                      {editingMessageId === m.id ? (
+                        <div className="space-y-2.5 min-w-[280px] p-2 bg-white rounded-xl border-2 border-primary-400 shadow-sm text-surface-900 animate-fade-in">
+                          <div className="flex items-center justify-between px-1">
+                            <span className="text-[11px] font-semibold text-primary-700 flex items-center gap-1">
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125" />
+                              </svg>
+                              Editing Message
+                            </span>
+                            <span className="text-[10px] text-surface-400">Enter to save • Shift+Enter for new line</span>
+                          </div>
+                          <textarea
+                            value={editingContent}
+                            onChange={(e) => setEditingContent(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                saveEdit(m.id);
+                              }
+                            }}
+                            className="w-full text-xs p-2.5 rounded-lg border border-surface-200 text-surface-900 bg-surface-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500 resize-none transition"
+                            rows={2}
+                            autoFocus
+                          />
+                          <div className="flex justify-end gap-2 pt-0.5">
+                            <button
+                              onClick={() => setEditingMessageId(null)}
+                              className="px-3 py-1.5 rounded-lg bg-surface-100 border border-surface-200 text-surface-700 text-xs font-medium hover:bg-surface-200 transition"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={() => saveEdit(m.id)}
+                              disabled={!editingContent.trim()}
+                              className="px-3.5 py-1.5 rounded-lg bg-primary-600 text-white text-xs font-medium hover:bg-primary-700 active:scale-95 disabled:opacity-50 transition shadow-xs flex items-center gap-1.5"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                              </svg>
+                              Save Changes
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {renderMessageContent(m.content)}
+                          {!isDeletedMsg && (
+                            <div className="flex items-center justify-end gap-1 mt-1">
+                              {m.editedAt && (
+                                <span className={`text-[9px] ${mine ? "text-primary-200" : "text-surface-400"}`}>
+                                  (edited)
+                                </span>
+                              )}
+                              <span className={`text-[10px] ${mine ? "text-primary-200" : "text-surface-400"}`}>
+                                {formatTime(m.createdAt)}
+                              </span>
+                            </div>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
-                )}
+                </div>
               </div>
             );
           })}
@@ -541,6 +822,32 @@ export default function ChatPage() {
           </div>
         )}
 
+        {/* WhatsApp Style Reply Preview Bar above Input */}
+        {replyingTo && (
+          <div className="bg-surface-50 border-l-4 border-emerald-500 rounded-xl p-3 flex items-center justify-between shadow-xs border border-surface-200">
+            <div className="min-w-0 pr-2">
+              <div className="flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5 text-emerald-600 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 15L3 9m0 0l6-6M3 9h12a6 6 0 016 6v3" />
+                </svg>
+                <span className="text-xs font-bold text-emerald-700">
+                  Replying to {replyingTo.senderName || "Staff"}
+                </span>
+              </div>
+              <p className="text-xs text-surface-600 truncate mt-0.5">{replyingTo.content}</p>
+            </div>
+            <button
+              onClick={() => setReplyingTo(null)}
+              className="text-surface-400 hover:text-surface-700 p-1 rounded-full shrink-0"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* Input Controls Bar */}
         <div className="flex gap-1.5 items-center bg-white rounded-2xl border border-surface-200 p-2 shadow-card">
           <input
             type="file"
@@ -576,7 +883,13 @@ export default function ChatPage() {
             onPaste={handlePaste}
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && sendMessage()}
             disabled={cooldown > 0}
-            placeholder={cooldown > 0 ? `${t.chat.retryIn} ${cooldown}${t.chat.seconds}…` : t.chat.typeMessage}
+            placeholder={
+              replyingTo
+                ? `Type reply to ${replyingTo.senderName || "Staff"}…`
+                : cooldown > 0
+                ? `${t.chat.retryIn} ${cooldown}${t.chat.seconds}…`
+                : t.chat.typeMessage
+            }
             className="flex-1 px-2 py-2 rounded-xl text-sm placeholder:text-surface-400 bg-transparent focus:outline-none disabled:opacity-60"
           />
           <button
@@ -591,6 +904,118 @@ export default function ChatPage() {
           </button>
         </div>
       </div>
+
+      {/* Custom Delete Confirmation Modal */}
+      {deleteModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !deleting && setDeleteModalOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 border border-surface-200 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 mx-auto flex items-center justify-center border border-red-200">
+              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-surface-900">Delete Message?</h3>
+              <p className="text-xs text-surface-500 mt-1">
+                Are you sure you want to delete this message? It will be replaced with <span className="font-semibold text-surface-700">'Original message was deleted'</span>.
+              </p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setDeleteModalOpen(false)}
+                disabled={deleting}
+                className="flex-1 py-2.5 rounded-xl border border-surface-200 text-surface-700 text-xs font-medium hover:bg-surface-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteMessage}
+                disabled={deleting}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-xs font-semibold hover:bg-red-700 active:scale-95 disabled:opacity-50 transition shadow-sm flex items-center justify-center gap-1.5"
+              >
+                {deleting ? "Deleting..." : "Delete Message"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Forward Message Modal */}
+      {forwardModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setForwardModalOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 border border-surface-200">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-base font-semibold text-surface-900">Forward Message</h3>
+                <p className="text-xs text-surface-500 mt-0.5">Select target chat groups to forward this message</p>
+              </div>
+              <button onClick={() => setForwardModalOpen(false)} className="text-surface-400 hover:text-surface-600 p-1 rounded-lg">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {forwardError && (
+              <div className="mb-4 px-3 py-2 rounded-xl bg-red-50 text-red-700 text-xs border border-red-200">
+                {forwardError}
+              </div>
+            )}
+
+            <div className="max-h-60 overflow-y-auto space-y-2 mb-5 pr-1">
+              {availableGroups.length === 0 ? (
+                <p className="text-xs text-surface-400 text-center py-6">No other chat groups available</p>
+              ) : (
+                availableGroups.map((g) => {
+                  const selected = selectedTargetGroupIds.includes(g.id);
+                  return (
+                    <div
+                      key={g.id}
+                      onClick={() =>
+                        setSelectedTargetGroupIds((prev) =>
+                          selected ? prev.filter((gid) => gid !== g.id) : [...prev, g.id]
+                        )
+                      }
+                      className={`flex items-center justify-between p-3 rounded-xl border text-xs cursor-pointer transition-all ${
+                        selected
+                          ? "border-primary-500 bg-primary-50/60 font-medium text-primary-900"
+                          : "border-surface-200 hover:border-surface-300 bg-surface-50/50"
+                      }`}
+                    >
+                      <span className="truncate">{g.name}</span>
+                      <div className={`w-4 h-4 rounded border flex items-center justify-center ${selected ? "bg-primary-600 border-primary-600 text-white" : "border-surface-300"}`}>
+                        {selected && (
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" strokeWidth={3} stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                          </svg>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-surface-200">
+              <button
+                onClick={() => setForwardModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-medium border border-surface-200 text-surface-600 hover:bg-surface-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleForwardSubmit}
+                disabled={selectedTargetGroupIds.length === 0 || forwarding}
+                className="px-4 py-2 rounded-xl text-xs font-medium bg-primary-600 text-white hover:bg-primary-700 disabled:opacity-50 transition-colors"
+              >
+                {forwarding ? "Forwarding..." : `Forward (${selectedTargetGroupIds.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Upload Drop Box Modal */}
       {uploadModalOpen && (

@@ -282,8 +282,9 @@ type Document struct {
 	GroupID        pgtype.UUID        `json:"group_id"`
 	Filename       string             `json:"filename"`
 	StoragePath    string             `json:"storage_path"`
-	Visibility     DocVisibility      `json:"visibility"`
+	Visibility     string             `json:"visibility"`
 	PasswordHash   pgtype.Text        `json:"password_hash"`
+	AllowedRoles   []string           `json:"allowed_roles"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	FilenameSearch interface{}        `json:"filename_search"`
 }
@@ -318,6 +319,7 @@ type Message struct {
 	SenderID      pgtype.UUID        `json:"sender_id"`
 	ReceiverID    pgtype.UUID        `json:"receiver_id"`
 	Content       string             `json:"content"`
+	ReplyToID     pgtype.UUID        `json:"reply_to_id"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	EditedAt      pgtype.Timestamptz `json:"edited_at"`
 	ContentSearch interface{}        `json:"content_search"`

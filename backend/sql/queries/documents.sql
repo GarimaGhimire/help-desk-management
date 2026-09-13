@@ -1,27 +1,25 @@
 -- name: CreateDocument :one
-INSERT INTO documents (uploaded_by, group_id, filename, storage_path, visibility, password_hash)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, created_at;
+INSERT INTO documents (uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at;
 
 -- name: GetDocument :one
-SELECT id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, created_at
+SELECT id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at
 FROM documents
 WHERE id = $1 LIMIT 1;
 
--- name: ListDocumentsForUser :many
-SELECT DISTINCT d.id, d.uploaded_by, d.group_id, d.filename, d.storage_path,
-                d.visibility, d.password_hash, d.created_at
+-- name: ListAllDocuments :many
+SELECT d.id, d.uploaded_by, d.group_id, d.filename, d.storage_path,
+       d.visibility, d.password_hash, d.allowed_roles, d.created_at,
+       COALESCE(u.display_name, u.name) AS uploader_name
 FROM documents d
-LEFT JOIN document_access da ON da.document_id = d.id
-WHERE d.visibility = 'all'
-   OR d.uploaded_by = $1
-   OR da.user_id = $1
+JOIN users u ON u.id = d.uploaded_by
 ORDER BY d.created_at DESC;
 
 -- name: UpdateDocumentVisibility :one
-UPDATE documents SET visibility = $2
+UPDATE documents SET visibility = $2, allowed_roles = $3
 WHERE id = $1
-RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, created_at;
+RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at;
 
 -- name: SetDocumentPassword :exec
 UPDATE documents SET password_hash = $2 WHERE id = $1;
@@ -34,12 +32,14 @@ ON CONFLICT (document_id, user_id) DO NOTHING;
 -- name: RevokeDocumentAccess :exec
 DELETE FROM document_access WHERE document_id = $1 AND user_id = $2;
 
--- name: HasDocumentAccess :one
-SELECT EXISTS (
-    SELECT 1 FROM documents d
-    WHERE d.id = $1
-      AND (d.visibility = 'all' OR d.uploaded_by = $2)
-    UNION
-    SELECT 1 FROM document_access da
-    WHERE da.document_id = $1 AND da.user_id = $2
-) AS has_access;
+-- name: ClearDocumentAccessList :exec
+DELETE FROM document_access WHERE document_id = $1;
+
+-- name: GetDocumentAccessList :many
+SELECT da.user_id, COALESCE(u.display_name, u.name) AS user_name, u.email
+FROM document_access da
+JOIN users u ON u.id = da.user_id
+WHERE da.document_id = $1;
+
+-- name: DeleteDocument :exec
+DELETE FROM documents WHERE id = $1;

@@ -19,8 +19,14 @@ type Querier interface {
 	CountUsersByOrg(ctx context.Context, orgID pgtype.UUID) (int64, error)
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) (AuditLog, error)
 	CreateDocument(ctx context.Context, arg CreateDocumentParams) (CreateDocumentRow, error)
+	DeleteDocument(ctx context.Context, id pgtype.UUID) error
+	ClearDocumentAccessList(ctx context.Context, documentID pgtype.UUID) error
+	GetDocumentAccessList(ctx context.Context, documentID pgtype.UUID) ([]GetDocumentAccessListRow, error)
+	ListAllDocuments(ctx context.Context) ([]ListAllDocumentsRow, error)
 	CreateGroup(ctx context.Context, arg CreateGroupParams) (CreateGroupRow, error)
 	CreateMessage(ctx context.Context, arg CreateMessageParams) (CreateMessageRow, error)
+	DeleteMessage(ctx context.Context, id pgtype.UUID) error
+	GetMessageByID(ctx context.Context, id pgtype.UUID) (GetMessageByIDRow, error)
 	CreateOTP(ctx context.Context, arg CreateOTPParams) (OtpCode, error)
 	CreateOrganization(ctx context.Context, arg CreateOrganizationParams) (Organization, error)
 	CreateSession(ctx context.Context, arg CreateSessionParams) (Session, error)
@@ -43,13 +49,11 @@ type Querier interface {
 	GlobalSearchMessages(ctx context.Context, arg GlobalSearchMessagesParams) ([]GlobalSearchMessagesRow, error)
 	GlobalSearchUsers(ctx context.Context, arg GlobalSearchUsersParams) ([]GlobalSearchUsersRow, error)
 	GrantDocumentAccess(ctx context.Context, arg GrantDocumentAccessParams) error
-	HasDocumentAccess(ctx context.Context, arg HasDocumentAccessParams) (bool, error)
 	IncrementOTPAttempts(ctx context.Context, id pgtype.UUID) error
 	IsEmailTaken(ctx context.Context, email pgtype.Text) (bool, error)
 	IsPhoneTaken(ctx context.Context, phone pgtype.Text) (bool, error)
 	ListAuditLogs(ctx context.Context, arg ListAuditLogsParams) ([]AuditLog, error)
 	ListDirectMessages(ctx context.Context, arg ListDirectMessagesParams) ([]ListDirectMessagesRow, error)
-	ListDocumentsForUser(ctx context.Context, uploadedBy pgtype.UUID) ([]ListDocumentsForUserRow, error)
 	ListGroupMembers(ctx context.Context, groupID pgtype.UUID) ([]ListGroupMembersRow, error)
 	ListGroupMessages(ctx context.Context, arg ListGroupMessagesParams) ([]ListGroupMessagesRow, error)
 	ListGroupsByOrg(ctx context.Context, dollar_1 pgtype.UUID) ([]ListGroupsByOrgRow, error)

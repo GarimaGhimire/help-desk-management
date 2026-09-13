@@ -12,9 +12,9 @@ import (
 )
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO messages (group_id, sender_id, receiver_id, content)
-VALUES ($1, $2, $3, $4)
-RETURNING id, group_id, sender_id, receiver_id, content, created_at, edited_at
+INSERT INTO messages (group_id, sender_id, receiver_id, content, reply_to_id)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, group_id, sender_id, receiver_id, content, reply_to_id, created_at, edited_at
 `
 
 type CreateMessageParams struct {
@@ -22,6 +22,7 @@ type CreateMessageParams struct {
 	SenderID   pgtype.UUID `json:"sender_id"`
 	ReceiverID pgtype.UUID `json:"receiver_id"`
 	Content    string      `json:"content"`
+	ReplyToID  pgtype.UUID `json:"reply_to_id"`
 }
 
 type CreateMessageRow struct {
@@ -30,6 +31,7 @@ type CreateMessageRow struct {
 	SenderID   pgtype.UUID        `json:"sender_id"`
 	ReceiverID pgtype.UUID        `json:"receiver_id"`
 	Content    string             `json:"content"`
+	ReplyToID  pgtype.UUID        `json:"reply_to_id"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	EditedAt   pgtype.Timestamptz `json:"edited_at"`
 }
@@ -40,6 +42,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (C
 		arg.SenderID,
 		arg.ReceiverID,
 		arg.Content,
+		arg.ReplyToID,
 	)
 	var i CreateMessageRow
 	err := row.Scan(
@@ -48,6 +51,48 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (C
 		&i.SenderID,
 		&i.ReceiverID,
 		&i.Content,
+		&i.ReplyToID,
+		&i.CreatedAt,
+		&i.EditedAt,
+	)
+	return i, err
+}
+
+const deleteMessage = `-- name: DeleteMessage :exec
+DELETE FROM messages WHERE id = $1
+`
+
+func (q *Queries) DeleteMessage(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteMessage, id)
+	return err
+}
+
+const getMessageByID = `-- name: GetMessageByID :one
+SELECT id, group_id, sender_id, receiver_id, content, reply_to_id, created_at, edited_at
+FROM messages WHERE id = $1 LIMIT 1
+`
+
+type GetMessageByIDRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	GroupID    pgtype.UUID        `json:"group_id"`
+	SenderID   pgtype.UUID        `json:"sender_id"`
+	ReceiverID pgtype.UUID        `json:"receiver_id"`
+	Content    string             `json:"content"`
+	ReplyToID  pgtype.UUID        `json:"reply_to_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	EditedAt   pgtype.Timestamptz `json:"edited_at"`
+}
+
+func (q *Queries) GetMessageByID(ctx context.Context, id pgtype.UUID) (GetMessageByIDRow, error) {
+	row := q.db.QueryRow(ctx, getMessageByID, id)
+	var i GetMessageByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.GroupID,
+		&i.SenderID,
+		&i.ReceiverID,
+		&i.Content,
+		&i.ReplyToID,
 		&i.CreatedAt,
 		&i.EditedAt,
 	)
@@ -55,7 +100,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (C
 }
 
 const listDirectMessages = `-- name: ListDirectMessages :many
-SELECT id, group_id, sender_id, receiver_id, content, created_at, edited_at
+SELECT id, group_id, sender_id, receiver_id, content, reply_to_id, created_at, edited_at
 FROM messages
 WHERE group_id IS NULL
   AND ((sender_id = $1 AND receiver_id = $2) OR (sender_id = $2 AND receiver_id = $1))
@@ -75,6 +120,7 @@ type ListDirectMessagesRow struct {
 	SenderID   pgtype.UUID        `json:"sender_id"`
 	ReceiverID pgtype.UUID        `json:"receiver_id"`
 	Content    string             `json:"content"`
+	ReplyToID  pgtype.UUID        `json:"reply_to_id"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	EditedAt   pgtype.Timestamptz `json:"edited_at"`
 }
@@ -94,6 +140,7 @@ func (q *Queries) ListDirectMessages(ctx context.Context, arg ListDirectMessages
 			&i.SenderID,
 			&i.ReceiverID,
 			&i.Content,
+			&i.ReplyToID,
 			&i.CreatedAt,
 			&i.EditedAt,
 		); err != nil {
@@ -108,12 +155,16 @@ func (q *Queries) ListDirectMessages(ctx context.Context, arg ListDirectMessages
 }
 
 const listGroupMessages = `-- name: ListGroupMessages :many
-SELECT m.id, m.group_id, m.sender_id, m.receiver_id, m.content, m.created_at, m.edited_at,
+SELECT m.id, m.group_id, m.sender_id, m.receiver_id, m.content, m.reply_to_id, m.created_at, m.edited_at,
        COALESCE(u.display_name, u.name) AS sender_name,
        u.avatar_url AS sender_avatar,
-       u.role AS sender_role
+       u.role AS sender_role,
+       rm.content AS reply_content,
+       COALESCE(ru.display_name, ru.name) AS reply_sender_name
 FROM messages m
 JOIN users u ON u.id = m.sender_id
+LEFT JOIN messages rm ON rm.id = m.reply_to_id
+LEFT JOIN users ru ON ru.id = rm.sender_id
 WHERE m.group_id = $1
   AND ($2::timestamptz IS NULL OR m.created_at < $2)
 ORDER BY m.created_at DESC
@@ -127,16 +178,19 @@ type ListGroupMessagesParams struct {
 }
 
 type ListGroupMessagesRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	GroupID      pgtype.UUID        `json:"group_id"`
-	SenderID     pgtype.UUID        `json:"sender_id"`
-	ReceiverID   pgtype.UUID        `json:"receiver_id"`
-	Content      string             `json:"content"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	EditedAt     pgtype.Timestamptz `json:"edited_at"`
-	SenderName   string             `json:"sender_name"`
-	SenderAvatar pgtype.Text        `json:"sender_avatar"`
-	SenderRole   UserRole           `json:"sender_role"`
+	ID              pgtype.UUID        `json:"id"`
+	GroupID         pgtype.UUID        `json:"group_id"`
+	SenderID        pgtype.UUID        `json:"sender_id"`
+	ReceiverID      pgtype.UUID        `json:"receiver_id"`
+	Content         string             `json:"content"`
+	ReplyToID       pgtype.UUID        `json:"reply_to_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	EditedAt        pgtype.Timestamptz `json:"edited_at"`
+	SenderName      string             `json:"sender_name"`
+	SenderAvatar    pgtype.Text        `json:"sender_avatar"`
+	SenderRole      UserRole           `json:"sender_role"`
+	ReplyContent    pgtype.Text        `json:"reply_content"`
+	ReplySenderName pgtype.Text        `json:"reply_sender_name"`
 }
 
 func (q *Queries) ListGroupMessages(ctx context.Context, arg ListGroupMessagesParams) ([]ListGroupMessagesRow, error) {
@@ -154,11 +208,14 @@ func (q *Queries) ListGroupMessages(ctx context.Context, arg ListGroupMessagesPa
 			&i.SenderID,
 			&i.ReceiverID,
 			&i.Content,
+			&i.ReplyToID,
 			&i.CreatedAt,
 			&i.EditedAt,
 			&i.SenderName,
 			&i.SenderAvatar,
 			&i.SenderRole,
+			&i.ReplyContent,
+			&i.ReplySenderName,
 		); err != nil {
 			return nil, err
 		}
@@ -171,12 +228,16 @@ func (q *Queries) ListGroupMessages(ctx context.Context, arg ListGroupMessagesPa
 }
 
 const searchMessagesInGroup = `-- name: SearchMessagesInGroup :many
-SELECT m.id, m.group_id, m.sender_id, m.receiver_id, m.content, m.created_at, m.edited_at,
+SELECT m.id, m.group_id, m.sender_id, m.receiver_id, m.content, m.reply_to_id, m.created_at, m.edited_at,
        COALESCE(u.display_name, u.name) AS sender_name,
        u.avatar_url AS sender_avatar,
-       u.role AS sender_role
+       u.role AS sender_role,
+       rm.content AS reply_content,
+       COALESCE(ru.display_name, ru.name) AS reply_sender_name
 FROM messages m
 JOIN users u ON u.id = m.sender_id
+LEFT JOIN messages rm ON rm.id = m.reply_to_id
+LEFT JOIN users ru ON ru.id = rm.sender_id
 WHERE m.group_id = $1
   AND m.content_search @@ plainto_tsquery('english', $2)
 ORDER BY m.created_at DESC
@@ -190,16 +251,19 @@ type SearchMessagesInGroupParams struct {
 }
 
 type SearchMessagesInGroupRow struct {
-	ID           pgtype.UUID        `json:"id"`
-	GroupID      pgtype.UUID        `json:"group_id"`
-	SenderID     pgtype.UUID        `json:"sender_id"`
-	ReceiverID   pgtype.UUID        `json:"receiver_id"`
-	Content      string             `json:"content"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	EditedAt     pgtype.Timestamptz `json:"edited_at"`
-	SenderName   string             `json:"sender_name"`
-	SenderAvatar pgtype.Text        `json:"sender_avatar"`
-	SenderRole   UserRole           `json:"sender_role"`
+	ID              pgtype.UUID        `json:"id"`
+	GroupID         pgtype.UUID        `json:"group_id"`
+	SenderID        pgtype.UUID        `json:"sender_id"`
+	ReceiverID      pgtype.UUID        `json:"receiver_id"`
+	Content         string             `json:"content"`
+	ReplyToID       pgtype.UUID        `json:"reply_to_id"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	EditedAt        pgtype.Timestamptz `json:"edited_at"`
+	SenderName      string             `json:"sender_name"`
+	SenderAvatar    pgtype.Text        `json:"sender_avatar"`
+	SenderRole      UserRole           `json:"sender_role"`
+	ReplyContent    pgtype.Text        `json:"reply_content"`
+	ReplySenderName pgtype.Text        `json:"reply_sender_name"`
 }
 
 func (q *Queries) SearchMessagesInGroup(ctx context.Context, arg SearchMessagesInGroupParams) ([]SearchMessagesInGroupRow, error) {
@@ -217,11 +281,14 @@ func (q *Queries) SearchMessagesInGroup(ctx context.Context, arg SearchMessagesI
 			&i.SenderID,
 			&i.ReceiverID,
 			&i.Content,
+			&i.ReplyToID,
 			&i.CreatedAt,
 			&i.EditedAt,
 			&i.SenderName,
 			&i.SenderAvatar,
 			&i.SenderRole,
+			&i.ReplyContent,
+			&i.ReplySenderName,
 		); err != nil {
 			return nil, err
 		}
@@ -236,7 +303,7 @@ func (q *Queries) SearchMessagesInGroup(ctx context.Context, arg SearchMessagesI
 const updateMessage = `-- name: UpdateMessage :one
 UPDATE messages SET content = $2, edited_at = NOW()
 WHERE id = $1
-RETURNING id, group_id, sender_id, receiver_id, content, created_at, edited_at
+RETURNING id, group_id, sender_id, receiver_id, content, reply_to_id, created_at, edited_at
 `
 
 type UpdateMessageParams struct {
@@ -245,13 +312,14 @@ type UpdateMessageParams struct {
 }
 
 type UpdateMessageRow struct {
-	ID         pgtype.UUID        `json:"id"`
-	GroupID    pgtype.UUID        `json:"group_id"`
-	SenderID   pgtype.UUID        `json:"sender_id"`
-	ReceiverID pgtype.UUID        `json:"receiver_id"`
-	Content    string             `json:"content"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	EditedAt   pgtype.Timestamptz `json:"edited_at"`
+	ID        pgtype.UUID        `json:"id"`
+	GroupID   pgtype.UUID        `json:"group_id"`
+	SenderID  pgtype.UUID        `json:"sender_id"`
+	ReceiverID pgtype.UUID       `json:"receiver_id"`
+	Content   string             `json:"content"`
+	ReplyToID pgtype.UUID        `json:"reply_to_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	EditedAt  pgtype.Timestamptz `json:"edited_at"`
 }
 
 func (q *Queries) UpdateMessage(ctx context.Context, arg UpdateMessageParams) (UpdateMessageRow, error) {
@@ -263,6 +331,7 @@ func (q *Queries) UpdateMessage(ctx context.Context, arg UpdateMessageParams) (U
 		&i.SenderID,
 		&i.ReceiverID,
 		&i.Content,
+		&i.ReplyToID,
 		&i.CreatedAt,
 		&i.EditedAt,
 	)

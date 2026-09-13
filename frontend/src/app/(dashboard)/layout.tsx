@@ -5,6 +5,7 @@ import NavLinks from "./nav-links";
 import BrandLink from "./brand-link";
 import LocaleToggle from "./locale-toggle";
 import ProfileMenu from "./profile-menu";
+import SuspensionOverlay from "./suspension-overlay";
 
 import en from "@/locales/en.json";
 import ne from "@/locales/ne.json";
@@ -57,6 +58,7 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen bg-surface-50">
+      <SuspensionOverlay />
       <aside className="w-64 bg-white border-r border-surface-200 flex flex-col">
         <div className="h-16 flex items-center px-5 border-b border-surface-100">
           <BrandLink isSuperadminDefault={isSuperadmin} />

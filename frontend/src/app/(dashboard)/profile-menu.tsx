@@ -85,6 +85,11 @@ export default function ProfileMenu() {
               {profile.org?.name && (
                 <p className="text-[11px] text-primary-600 mt-0.5 truncate">{profile.org.name}</p>
               )}
+              {(profile.org_suspended || profile.org?.is_active === false) && (
+                <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700 border border-red-200">
+                  Suspended Account
+                </span>
+              )}
             </div>
           </div>
 
