@@ -15,9 +15,16 @@ interface Employee {
 
 export default function StaffDirectoryPage() {
   const { t } = useI18n();
-  const authUser = getAuthUser();
+  const [authUser, setAuthUser] = useState<ReturnType<typeof getAuthUser>>(null);
+
+  useEffect(() => {
+    setAuthUser(getAuthUser());
+  }, []);
+
   const canCreateStaff =
-    authUser?.role === "org_admin" || authUser?.role === "superadmin";
+    authUser?.role === "org_admin" ||
+    authUser?.role === "staff_admin" ||
+    authUser?.role === "superadmin";
 
   const [query, setQuery] = useState("");
   const [allStaff, setAllStaff] = useState<Employee[]>([]);
@@ -32,6 +39,25 @@ export default function StaffDirectoryPage() {
   const [staffName, setStaffName] = useState("");
   const [staffEmail, setStaffEmail] = useState("");
   const [staffPassword, setStaffPassword] = useState("");
+  const [staffRole, setStaffRole] = useState("org_member");
+
+  // Edit role modal state
+  const [editEmployee, setEditEmployee] = useState<Employee | null>(null);
+  const [editRole, setEditRole] = useState("org_member");
+  const [updatingRole, setUpdatingRole] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  // Roles & Positions state
+  const [customRoles, setCustomRoles] = useState<{ id: string; name: string }[]>([]);
+  const [positions, setPositions] = useState<{ id: string; name: string }[]>([]);
+  const [roleModalOpen, setRoleModalOpen] = useState(false);
+  const [positionModalOpen, setPositionModalOpen] = useState(false);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRoleDesc, setNewRoleDesc] = useState("");
+  const [newPosName, setNewPosName] = useState("");
+  const [newPosDesc, setNewPosDesc] = useState("");
+  const [creatingItem, setCreatingItem] = useState(false);
+  const [modalItemError, setModalItemError] = useState("");
 
   // Load full staff list on mount
   useEffect(() => {
@@ -44,6 +70,23 @@ export default function StaffDirectoryPage() {
       })
       .catch(() => setSearchError("Failed to load staff directory."))
       .finally(() => setLoading(false));
+  }, []);
+
+  const fetchRolesAndPositions = async () => {
+    try {
+      const [rData, pData] = await Promise.all([
+        api.get<{ id: string; name: string }[]>("/roles/custom-roles"),
+        api.get<{ id: string; name: string }[]>("/roles/positions"),
+      ]);
+      setCustomRoles(rData);
+      setPositions(pData);
+    } catch {
+      // ignore
+    }
+  };
+
+  useEffect(() => {
+    fetchRolesAndPositions();
   }, []);
 
   // Filter / search when query changes
@@ -82,7 +125,7 @@ export default function StaffDirectoryPage() {
       const body: Record<string, unknown> = {
         name: staffName.trim(),
         email: staffEmail.trim(),
-        role: "org_member",
+        role: staffRole,
       };
       if (staffPassword) body.password = staffPassword;
       const created = await api.post<Employee>("/users", body);
@@ -90,10 +133,10 @@ export default function StaffDirectoryPage() {
       setStaffName("");
       setStaffEmail("");
       setStaffPassword("");
+      setStaffRole("org_member");
       setCreateStaffOpen(false);
       setStaffError("");
       setCreatingStaff(false);
-      // Add to the full staff list so it shows up immediately
       setAllStaff((prev) => [created, ...prev]);
     } catch (err) {
       setStaffError(
@@ -103,18 +146,103 @@ export default function StaffDirectoryPage() {
     }
   };
 
+  const handleUpdateRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editEmployee) return;
+    setUpdatingRole(true);
+    setEditError("");
+    try {
+      const updated = await api.patch<Employee>(`/users/${editEmployee.id}`, {
+        role: editRole,
+      });
+      setAllStaff((prev) =>
+        prev.map((emp) => (emp.id === updated.id ? updated : emp))
+      );
+      setEditEmployee(null);
+    } catch (err) {
+      setEditError(
+        err instanceof Error ? err.message : "Failed to update role"
+      );
+    } finally {
+      setUpdatingRole(false);
+    }
+  };
+
+  const handleCreateRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newRoleName.trim()) return;
+    setCreatingItem(true);
+    setModalItemError("");
+    try {
+      await api.post("/roles/custom-roles", {
+        name: newRoleName.trim(),
+        description: newRoleDesc.trim(),
+      });
+      setNewRoleName("");
+      setNewRoleDesc("");
+      setRoleModalOpen(false);
+      fetchRolesAndPositions();
+    } catch (err) {
+      setModalItemError(err instanceof Error ? err.message : "Failed to create role");
+    } finally {
+      setCreatingItem(false);
+    }
+  };
+
+  const handleCreatePosition = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newPosName.trim()) return;
+    setCreatingItem(true);
+    setModalItemError("");
+    try {
+      await api.post("/roles/positions", {
+        name: newPosName.trim(),
+        description: newPosDesc.trim(),
+      });
+      setNewPosName("");
+      setNewPosDesc("");
+      setPositionModalOpen(false);
+      fetchRolesAndPositions();
+    } catch (err) {
+      setModalItemError(err instanceof Error ? err.message : "Failed to create position");
+    } finally {
+      setCreatingItem(false);
+    }
+  };
+
+  const canEditStaffRole = (emp: Employee) => {
+    if (!authUser) return false;
+    if (authUser.role === "superadmin") return true;
+    if (authUser.role === "org_admin") return emp.role !== "org_admin";
+    if (authUser.role === "staff_admin")
+      return emp.role !== "org_admin" && emp.role !== "staff_admin";
+    return false;
+  };
+
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-lg font-semibold text-surface-900">
           {t.nav.staffDirectory}
         </h1>
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-surface-500 mt-0.5">
+        <div className="flex items-center justify-between mt-1">
+          <p className="text-sm text-surface-500">
             Find colleagues and team members
           </p>
           {canCreateStaff && (
             <div className="flex items-center gap-2">
+              <button
+                onClick={() => setRoleModalOpen(true)}
+                className="px-3 py-1.5 rounded-lg border border-surface-200 bg-white text-surface-700 text-xs font-medium hover:bg-surface-50 transition-colors"
+              >
+                + New Custom Role
+              </button>
+              <button
+                onClick={() => setPositionModalOpen(true)}
+                className="px-3 py-1.5 rounded-lg border border-surface-200 bg-white text-surface-700 text-xs font-medium hover:bg-surface-50 transition-colors"
+              >
+                + New Position
+              </button>
               <button
                 onClick={() => setCreateStaffOpen(true)}
                 className="px-3 py-1.5 rounded-lg bg-primary-600 text-white text-sm font-medium hover:bg-primary-700 transition-colors"
@@ -125,6 +253,32 @@ export default function StaffDirectoryPage() {
           )}
         </div>
       </div>
+
+      {/* Roles & Positions Tags Banner */}
+      {(customRoles.length > 0 || positions.length > 0) && (
+        <div className="mb-6 p-4 bg-surface-50 border border-surface-200 rounded-xl space-y-2">
+          {customRoles.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-surface-500">Custom Roles:</span>
+              {customRoles.map((r) => (
+                <span key={r.id} className="text-xs px-2.5 py-1 rounded-full bg-primary-100 text-primary-800 font-medium">
+                  {r.name}
+                </span>
+              ))}
+            </div>
+          )}
+          {positions.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-semibold text-surface-500">Positions:</span>
+              {positions.map((p) => (
+                <span key={p.id} className="text-xs px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 font-medium">
+                  {p.name}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="relative max-w-md mb-6">
         <svg
@@ -190,11 +344,25 @@ export default function StaffDirectoryPage() {
                   {e.email || e.phone}
                 </p>
               </div>
-              {e.role && (
-                <span className="text-xs px-2.5 py-1 rounded-full bg-surface-100 text-surface-600 shrink-0 capitalize">
-                  {e.role.replace("_", " ")}
-                </span>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {e.role && (
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-surface-100 text-surface-600 capitalize font-medium">
+                    {e.role.replace("_", " ")}
+                  </span>
+                )}
+                {canEditStaffRole(e) && (
+                  <button
+                    onClick={() => {
+                      setEditEmployee(e);
+                      setEditRole(e.role);
+                      setEditError("");
+                    }}
+                    className="text-xs text-primary-600 hover:text-primary-800 font-medium px-2 py-1 rounded hover:bg-primary-50 transition-colors"
+                  >
+                    Edit Role
+                  </button>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -222,6 +390,166 @@ export default function StaffDirectoryPage() {
       {staffSuccess && (
         <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-xl text-sm text-green-700 animate-fade-in">
           Staff account created successfully
+        </div>
+      )}
+
+      {/* Modal: Create Custom Role */}
+      {roleModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onClick={() => !creatingItem && setRoleModalOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-base font-semibold text-surface-900 mb-1">Create Custom Role</h3>
+            <p className="text-xs text-surface-500 mb-4">Define a new custom role for your organization staff.</p>
+            <form onSubmit={handleCreateRole}>
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="block text-xs font-medium text-surface-500 mb-1">Role Name</label>
+                  <input
+                    value={newRoleName}
+                    onChange={(e) => setNewRoleName(e.target.value)}
+                    placeholder="e.g. Senior Support Agent"
+                    className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-surface-500 mb-1">Description (Optional)</label>
+                  <input
+                    value={newRoleDesc}
+                    onChange={(e) => setNewRoleDesc(e.target.value)}
+                    placeholder="e.g. Handles Tier 2 escalations"
+                    className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+              {modalItemError && <div className="mb-3 text-xs text-red-600">{modalItemError}</div>}
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={creatingItem || !newRoleName.trim()}
+                  className="flex-1 py-2 rounded-lg bg-primary-600 text-white text-xs font-medium hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {creatingItem ? "Saving..." : "Create Role"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRoleModalOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-surface-200 text-xs text-surface-600 hover:bg-surface-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Create Position */}
+      {positionModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/30" onClick={() => !creatingItem && setPositionModalOpen(false)} />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-base font-semibold text-surface-900 mb-1">Create Position</h3>
+            <p className="text-xs text-surface-500 mb-4">Define a new job title or position for staff directory.</p>
+            <form onSubmit={handleCreatePosition}>
+              <div className="space-y-3 mb-4">
+                <div>
+                  <label className="block text-xs font-medium text-surface-500 mb-1">Position Name</label>
+                  <input
+                    value={newPosName}
+                    onChange={(e) => setNewPosName(e.target.value)}
+                    placeholder="e.g. Helpdesk Lead"
+                    className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-surface-500 mb-1">Description (Optional)</label>
+                  <input
+                    value={newPosDesc}
+                    onChange={(e) => setNewPosDesc(e.target.value)}
+                    placeholder="e.g. Operations division"
+                    className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+              {modalItemError && <div className="mb-3 text-xs text-red-600">{modalItemError}</div>}
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={creatingItem || !newPosName.trim()}
+                  className="flex-1 py-2 rounded-lg bg-primary-600 text-white text-xs font-medium hover:bg-primary-700 disabled:opacity-50"
+                >
+                  {creatingItem ? "Saving..." : "Create Position"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPositionModalOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-surface-200 text-xs text-surface-600 hover:bg-surface-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Role Modal */}
+      {editEmployee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/30"
+            onClick={() => !updatingRole && setEditEmployee(null)}
+          />
+          <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-base font-semibold text-surface-900 mb-1">
+              Edit Role / Position
+            </h3>
+            <p className="text-xs text-surface-500 mb-4">
+              Updating role for <span className="font-medium text-surface-800">{editEmployee.name}</span>
+            </p>
+
+            <form onSubmit={handleUpdateRole}>
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-surface-500 mb-1.5">
+                  System Permission Level
+                </label>
+                <select
+                  value={editRole}
+                  onChange={(e) => setEditRole(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white"
+                >
+                  <option value="org_member">Staff Member (org_member)</option>
+                  {(authUser?.role === "org_admin" || authUser?.role === "superadmin") && (
+                    <option value="staff_admin">Staff Administrator (staff_admin)</option>
+                  )}
+                </select>
+              </div>
+
+              {editError && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-600">
+                  {editError}
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={updatingRole}
+                  className="flex-1 py-2 rounded-lg bg-primary-600 text-white text-xs font-medium hover:bg-primary-700 disabled:opacity-50 transition-all"
+                >
+                  {updatingRole ? "Saving..." : "Save Role"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditEmployee(null)}
+                  disabled={updatingRole}
+                  className="px-4 py-2 rounded-lg border border-surface-200 text-xs text-surface-600 hover:bg-surface-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 
@@ -277,6 +605,21 @@ export default function StaffDirectoryPage() {
                     className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:border-primary-400 focus:ring-[3px] focus:ring-primary-100 transition"
                   />
                 </div>
+                {(authUser?.role === "org_admin" || authUser?.role === "superadmin") && (
+                  <div className="col-span-2">
+                    <label className="block text-xs font-medium text-surface-500 mb-1.5">
+                      Role / Permission Level
+                    </label>
+                    <select
+                      value={staffRole}
+                      onChange={(e) => setStaffRole(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-surface-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white"
+                    >
+                      <option value="org_member">Staff Member (org_member)</option>
+                      <option value="staff_admin">Staff Administrator (staff_admin)</option>
+                    </select>
+                  </div>
+                )}
                 <div className="col-span-2">
                   <label className="block text-xs font-medium text-surface-500 mb-1.5">
                     Password

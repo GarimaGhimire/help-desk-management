@@ -17,6 +17,7 @@ import (
 	"github.com/fintara/helpdesk/internal/groups"
 	"github.com/fintara/helpdesk/internal/messages"
 	"github.com/fintara/helpdesk/internal/profile"
+	"github.com/fintara/helpdesk/internal/roles"
 	"github.com/fintara/helpdesk/internal/search"
 	"github.com/fintara/helpdesk/internal/users"
 	"github.com/fintara/helpdesk/pkg/db"
@@ -88,10 +89,12 @@ func main() {
 
 	r.Mount("/auth", auth.Handlers(repos, mail))
 	r.Mount("/avatars", profile.AvatarHandler())
+	r.Mount("/attachments", messages.AttachmentHandler())
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(repos))
 		r.Mount("/me", profile.Handlers(repos))
 		r.Mount("/users", users.Handlers(repos, mail))
+		r.Mount("/roles", roles.Handlers(repos))
 		r.Mount("/groups", groups.Handlers(repos))
 		r.Mount("/messages", messages.Handlers(repos))
 		r.Mount("/documents", documents.Handlers(repos))

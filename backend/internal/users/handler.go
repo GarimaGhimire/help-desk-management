@@ -30,7 +30,7 @@ func Handlers(repos *db.Repos, mail *mailer.Mailer) chi.Router {
 	r.Get("/{id}", s.getUser)
 
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireRole("org_admin", "superadmin"))
+		r.Use(middleware.RequireRole("org_admin", "staff_admin", "superadmin"))
 		r.Post("/", s.createUser)
 		r.Patch("/{id}", s.updateUser)
 		r.Post("/{id}/reset-password", s.resetPassword)
@@ -164,10 +164,14 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
 		orgID = db.ParseUUID(me.OrgID)
 	}
 
-	// Only a superadmin may grant the org_admin role.
+	// Role resolution:
+	// - superadmin can grant org_admin, staff_admin, or org_member
+	// - org_admin can grant staff_admin or org_member (cannot grant org_admin)
 	role := sqldb.UserRoleOrgMember
 	switch req.Role {
 	case "", "org_member":
+	case "staff_admin":
+		role = sqldb.UserRole("staff_admin")
 	case "org_admin":
 		if me.Role != "superadmin" {
 			middleware.RespondError(w, http.StatusForbidden, "only a platform superadmin can grant the org_admin role")
@@ -175,7 +179,7 @@ func (s *Service) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 		role = sqldb.UserRoleOrgAdmin
 	default:
-		middleware.RespondError(w, http.StatusBadRequest, "role must be org_member or org_admin")
+		middleware.RespondError(w, http.StatusBadRequest, "invalid role specified")
 		return
 	}
 
@@ -305,6 +309,11 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 		middleware.RespondError(w, http.StatusForbidden, "only a platform superadmin can modify org_admin accounts")
 		return
 	}
+	// A staff_admin cannot modify org_admin accounts or other staff_admin accounts.
+	if me.Role == "staff_admin" && (string(row.Role) == "org_admin" || string(row.Role) == "staff_admin") {
+		middleware.RespondError(w, http.StatusForbidden, "staff administrators cannot modify org_admin or other administrator accounts")
+		return
+	}
 
 	var req struct {
 		Name         *string `json:"name"`
@@ -353,7 +362,7 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 	role := row.Role
 	if req.Role != nil {
 		switch *req.Role {
-		case "org_member", "org_admin":
+		case "org_member", "staff_admin", "org_admin":
 			if *req.Role == "org_admin" && string(row.Role) != "org_admin" && me.Role != "superadmin" {
 				middleware.RespondError(w, http.StatusForbidden, "only a platform superadmin can grant the org_admin role")
 				return
@@ -362,9 +371,13 @@ func (s *Service) updateUser(w http.ResponseWriter, r *http.Request) {
 				middleware.RespondError(w, http.StatusForbidden, "only a platform superadmin can demote an org_admin")
 				return
 			}
+			if *req.Role == "staff_admin" && me.Role == "staff_admin" {
+				middleware.RespondError(w, http.StatusForbidden, "only an organization admin can grant administrator roles")
+				return
+			}
 			role = sqldb.UserRole(*req.Role)
 		default:
-			middleware.RespondError(w, http.StatusBadRequest, "role must be org_member or org_admin")
+			middleware.RespondError(w, http.StatusBadRequest, "invalid role specified")
 			return
 		}
 	}

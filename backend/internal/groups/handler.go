@@ -27,7 +27,7 @@ func Handlers(repos *db.Repos) chi.Router {
 	r.Get("/search", s.searchGroups)
 
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.RequireRole("org_admin", "superadmin"))
+		r.Use(middleware.RequireRole("org_admin", "staff_admin", "superadmin"))
 		r.Post("/", s.createGroup)
 	})
 
@@ -57,9 +57,13 @@ func (s *Service) requireManage(next http.Handler) http.Handler {
 			middleware.RespondError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		_, manage := access.GroupPermissions(r.Context(), s.repos, me, chi.URLParam(r, "id"))
-		if !manage {
-			middleware.RespondError(w, http.StatusForbidden, "insufficient permissions")
+		if me.Role != "org_admin" && me.Role != "staff_admin" {
+			middleware.RespondError(w, http.StatusForbidden, "only administrative accounts can configure group membership")
+			return
+		}
+		accessGroup, _ := access.GroupPermissions(r.Context(), s.repos, me, chi.URLParam(r, "id"))
+		if !accessGroup {
+			middleware.RespondError(w, http.StatusNotFound, "group not found")
 			return
 		}
 		next.ServeHTTP(w, r)

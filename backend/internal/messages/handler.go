@@ -2,11 +2,14 @@ package messages
 
 import (
 	"context"
+	cryptoRand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -259,13 +262,107 @@ var (
 	messageLimiter = newRateLimiter()
 )
 
+const maxAttachmentBytes = 15 << 20 // 15 MiB limit per file
+
+func AttachmentHandler() http.Handler {
+	uploadDir := os.Getenv("UPLOAD_DIR")
+	if uploadDir == "" {
+		uploadDir = "./data/uploads"
+	}
+	return http.StripPrefix("/attachments/", http.FileServer(http.Dir(filepath.Join(uploadDir, "attachments"))))
+}
+
 func Handlers(repos *db.Repos) chi.Router {
 	r := chi.NewRouter()
+	r.Post("/upload", uploadAttachment(repos))
 	r.Get("/ws", handleWebSocket(repos))
 	r.Get("/search", searchMessages(repos))
 	r.Get("/{groupId}", listMessages(repos))
 	return r
 }
+
+func uploadAttachment(repos *db.Repos) http.HandlerFunc {
+	uploadDir := os.Getenv("UPLOAD_DIR")
+	if uploadDir == "" {
+		uploadDir = "./data/uploads"
+	}
+	attachmentDir := filepath.Join(uploadDir, "attachments")
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		me := middleware.GetUser(r)
+		if me == nil {
+			middleware.RespondError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		if err := r.ParseMultipartForm(maxAttachmentBytes); err != nil {
+			middleware.RespondError(w, http.StatusBadRequest, "file attachment must be under 15MB")
+			return
+		}
+
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			middleware.RespondError(w, http.StatusBadRequest, "file is required")
+			return
+		}
+		defer file.Close()
+
+		if header.Size > maxAttachmentBytes {
+			middleware.RespondError(w, http.StatusBadRequest, "file size exceeds maximum limit of 15MB")
+			return
+		}
+
+		data, err := io.ReadAll(io.LimitReader(file, maxAttachmentBytes))
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to read uploaded file")
+			return
+		}
+		if len(data) == 0 {
+			middleware.RespondError(w, http.StatusBadRequest, "uploaded file is empty")
+			return
+		}
+
+		if err := os.MkdirAll(attachmentDir, 0o755); err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to prepare storage")
+			return
+		}
+
+		ext := filepath.Ext(header.Filename)
+		cleanExt := strings.ToLower(strings.TrimSpace(ext))
+		if cleanExt == "" {
+			cleanExt = ".bin"
+		}
+
+		randomStr, _ := randomSuffix(6)
+		filename := fmt.Sprintf("%d-%s%s", time.Now().UnixNano(), randomStr, cleanExt)
+		dst := filepath.Join(attachmentDir, filename)
+
+		if err := os.WriteFile(dst, data, 0o600); err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to save attachment")
+			return
+		}
+
+		fileURL := "/attachments/" + filename
+		isImage := strings.HasPrefix(http.DetectContentType(data), "image/")
+
+		middleware.RespondJSON(w, http.StatusCreated, map[string]interface{}{
+			"url":      fileURL,
+			"name":     header.Filename,
+			"size":     header.Size,
+			"is_image": isImage,
+		})
+	}
+}
+
+func randomSuffix(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := io.ReadFull(cryptoRandReader, b); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", b), nil
+}
+
+var cryptoRandReader = cryptoRand.Reader
 
 func handleWebSocket(repos *db.Repos) http.HandlerFunc {
 	messageHubOnce.Do(func() { go messageHub.run() })

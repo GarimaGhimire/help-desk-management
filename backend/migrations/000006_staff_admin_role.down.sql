@@ -1,0 +1,2 @@
+-- Migration 000006 down script
+-- Enum value removal in PostgreSQL is not supported without type recreation; no-op safely.
