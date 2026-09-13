@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import Link from "next/link";
 
 import NavLinks from "./nav-links";
+import BrandLink from "./brand-link";
 import LocaleToggle from "./locale-toggle";
 import ProfileMenu from "./profile-menu";
 
@@ -30,6 +30,7 @@ const allNavItems: NavCandidate[] = [
 function decodeRole(token: string): string | null {
   try {
     const payload = token.split(".")[1];
+    if (!payload) return null;
     const json = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
     return JSON.parse(json).role || null;
   } catch {
@@ -58,21 +59,10 @@ export default function DashboardLayout({
     <div className="flex h-screen bg-surface-50">
       <aside className="w-64 bg-white border-r border-surface-200 flex flex-col">
         <div className="h-16 flex items-center px-5 border-b border-surface-100">
-          <Link
-            href={isSuperadmin ? "/admin" : "/groups"}
-            className="flex items-center rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-primary-300"
-            title={t.app.title}
-          >
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary-600 to-accent-600 flex items-center justify-center shadow-sm">
-              <span className="text-white font-bold text-sm">FD</span>
-            </div>
-            <span className="ml-3 font-semibold text-surface-900 text-sm hover:text-primary-700 transition-colors">
-              {t.app.title}
-            </span>
-          </Link>
+          <BrandLink isSuperadminDefault={isSuperadmin} />
         </div>
 
-        <NavLinks items={items} />
+        <NavLinks items={items} isSuperadminDefault={isSuperadmin} />
 
         <div className="px-4 py-3 border-t border-surface-100">
           <p className="text-[11px] text-surface-400">{t.app.tagline}</p>

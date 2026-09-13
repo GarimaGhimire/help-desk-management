@@ -48,7 +48,7 @@ export default function ProfileMenu() {
 
   const signOut = () => {
     document.cookie = "token=; path=/; max-age=0";
-    router.push("/login");
+    window.location.href = "/login";
   };
 
   return (

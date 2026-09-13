@@ -2,12 +2,28 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
+import { getAuthUser } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 
 export type NavItem = {
   href: string;
   icon: string;
   label: string;
 };
+
+type NavCandidate = {
+  href: string;
+  icon: string;
+  labelKey: "groups" | "staffDirectory" | "documents" | "admin";
+};
+
+const allNavItems: NavCandidate[] = [
+  { href: "/groups", icon: "chat", labelKey: "groups" },
+  { href: "/staff-directory", icon: "users", labelKey: "staffDirectory" },
+  { href: "/documents", icon: "file", labelKey: "documents" },
+  { href: "/admin", icon: "admin", labelKey: "admin" },
+];
 
 function NavIcon({ icon, active }: { icon: string; active: boolean }) {
   const color = active ? "text-primary-600" : "text-surface-400";
@@ -36,13 +52,39 @@ function NavIcon({ icon, active }: { icon: string; active: boolean }) {
   );
 }
 
-export default function NavLinks({ items }: { items: NavItem[] }) {
+export default function NavLinks({
+  isSuperadminDefault,
+}: {
+  items?: NavItem[];
+  isSuperadminDefault?: boolean;
+}) {
   const pathname = usePathname();
+  const { t } = useI18n();
+  const [role, setRole] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRole(getAuthUser()?.role ?? null);
+  }, [pathname]);
+
+  const onAdminRoute = pathname === "/admin" || pathname.startsWith("/admin/");
+  const isSuperadmin =
+    onAdminRoute ||
+    role === "superadmin" ||
+    (role === null && (isSuperadminDefault ?? false));
+
+  const displayItems: NavItem[] = allNavItems
+    .filter(({ href }) => (isSuperadmin ? href === "/admin" : href !== "/admin"))
+    .map(({ href, icon, labelKey }) => ({
+      href,
+      icon,
+      label: t.nav[labelKey],
+    }));
+
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
 
   return (
     <nav className="flex-1 px-3 py-4 space-y-1">
-      {items.map(({ href, icon, label }) => {
+      {displayItems.map(({ href, icon, label }) => {
         const active = isActive(href);
         return (
           <Link

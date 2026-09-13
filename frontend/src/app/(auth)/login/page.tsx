@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
 import { api, getAuthUser, homeForRole } from "@/lib/api";
 
@@ -22,7 +21,6 @@ function Brand({ title }: { title: string }) {
 
 export default function LoginPage() {
   const { t } = useI18n();
-  const router = useRouter();
   const [mode, setMode] = useState<Mode>("password");
   const [contact, setContact] = useState("");
   const [password, setPassword] = useState("");
@@ -40,12 +38,13 @@ export default function LoginPage() {
         contact,
         password,
       });
-      document.cookie = `token=${res.token}; path=/; SameSite=Lax; Secure`;
+      const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
+      document.cookie = `token=${res.token}; path=/; SameSite=Lax${isSecure ? "; Secure" : ""}`;
       if (res.must_change_password) {
-        router.push("/change-password");
+        window.location.href = "/change-password";
         return;
       }
-      router.push(homeForRole(getAuthUser()?.role));
+      window.location.href = homeForRole(getAuthUser()?.role);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed");
     } finally {
@@ -71,9 +70,10 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const res = await api.post<{ token: string }>("/auth/verify-otp", { contact, code: otp });
-      document.cookie = `token=${res.token}; path=/; SameSite=Lax; Secure`;
+      const isSecure = typeof window !== "undefined" && window.location.protocol === "https:";
+      document.cookie = `token=${res.token}; path=/; SameSite=Lax${isSecure ? "; Secure" : ""}`;
       const user = getAuthUser();
-      router.push(homeForRole(user?.role));
+      window.location.href = homeForRole(user?.role);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
     } finally {

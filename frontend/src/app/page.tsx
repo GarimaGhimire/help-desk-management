@@ -8,7 +8,12 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace(homeForRole(getAuthUser()?.role));
+    const user = getAuthUser();
+    if (!user) {
+      router.replace("/login");
+      return;
+    }
+    router.replace(homeForRole(user.role));
   }, [router]);
 
   return null;
