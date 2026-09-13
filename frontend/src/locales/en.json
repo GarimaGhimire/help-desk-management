@@ -2,19 +2,40 @@
   "app": {
     "title": "Help Desk",
     "login": "Login",
-    "logout": "Logout"
+    "logout": "Logout",
+    "tagline": "Fintara support workspace",
+    "welcomeBack": "Welcome back",
+    "signInSubtitle": "Sign in to manage support conversations",
+    "otpSubtitle": "Get a one-time code on your phone or email"
   },
   "nav": {
     "groups": "Groups",
     "staffDirectory": "Staff Directory",
-    "documents": "Documents"
+    "documents": "Documents",
+    "admin": "Admin"
   },
   "auth": {
     "enterPhone": "Enter your phone number or email",
     "sendOtp": "Send OTP",
     "enterOtp": "Enter the OTP code",
     "verify": "Verify",
-    "invalidCode": "Invalid code. Please try again."
+    "signIn": "Sign in",
+    "signingIn": "Signing in...",
+    "sending": "Sending...",
+    "verifying": "Verifying...",
+    "password": "Password",
+    "emailOrPhone": "Email or phone",
+    "verificationCode": "Verification code",
+    "changeNumber": "Use a different phone number",
+    "otp": "OTP",
+    "invalidCode": "Invalid code. Please try again.",
+    "headline": "Support that keeps pace with your team.",
+    "featureTitle": "Everything your support team needs",
+    "features": [
+      "Group conversations with live updates",
+      "Per-organization staff and quotas",
+      "Document sharing and granular access"
+    ]
   },
   "groups": {
     "create": "Create Group",
@@ -29,7 +50,13 @@
   "chat": {
     "typeMessage": "Type a message...",
     "send": "Send",
-    "search": "Search messages..."
+    "search": "Search messages...",
+    "tooFast": "Slow down",
+    "retryIn": "Try again in",
+    "seconds": "s",
+    "connected": "Connected",
+    "reconnecting": "Reconnecting...",
+    "noMessages": "No messages yet. Start the conversation!"
   },
   "staff": {
     "search": "Search employees...",
@@ -42,5 +69,52 @@
     "all": "All Members",
     "restricted": "Restricted",
     "password": "Password Protection"
+  },
+  "profile": {
+    "editProfile": "Edit profile",
+    "settings": "Settings",
+    "displayName": "Display name",
+    "avatar": "Profile picture",
+    "changeAvatar": "Change photo",
+    "uploadHint": "PNG, JPG, WEBP or GIF up to 2 MB",
+    "save": "Save changes",
+    "saving": "Saving...",
+    "cancel": "Cancel",
+    "changePassword": "Change password",
+    "signOut": "Sign out",
+    "roleLabel": {
+      "superadmin": "Platform admin",
+      "org_admin": "Organization admin",
+      "group_admin": "Group admin",
+      "org_member": "Support"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "subtitle": "Manage your profile and account preferences",
+    "profileSection": "Profile",
+    "profilePicture": "Profile picture",
+    "changePhoto": "Change photo",
+    "removePhoto": "Remove",
+    "displayName": "Display name",
+    "displayNameHint": "Shown to others in conversations",
+    "phone": "Phone",
+    "phoneHint": "Optional. Used for sign-in and account recovery.",
+    "accountSection": "Account",
+    "passwordChange": "Change password",
+    "passwordChangeHint": "Update the password you use to sign in.",
+    "open": "Open",
+    "save": "Save changes",
+    "saving": "Saving...",
+    "saved": "Saved",
+    "dangerZone": "Danger zone",
+    "deactivateTitle": "Deactivate account",
+    "deactivateHint": "You won't be able to sign in until an administrator re-enables your account.",
+    "deactivate": "Deactivate account",
+    "deactivating": "Deactivating...",
+    "confirmTitle": "Deactivate your account?",
+    "confirmBody": "This signs you out immediately and disables sign-in until an administrator re-enables your account.",
+    "confirm": "Deactivate",
+    "cancel": "Cancel"
   }
 }

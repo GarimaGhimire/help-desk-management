@@ -13,6 +13,7 @@ import (
 	"time"
 
 	sqldb "github.com/fintara/helpdesk/internal/db"
+	"github.com/fintara/helpdesk/pkg/access"
 	"github.com/fintara/helpdesk/pkg/db"
 	"github.com/fintara/helpdesk/pkg/middleware"
 	"github.com/go-chi/chi/v5"
@@ -74,7 +75,17 @@ func (c *Client) readPump() {
 			Content string `json:"content"`
 		}
 		if err := json.Unmarshal(data, &incoming); err != nil || strings.TrimSpace(incoming.Content) == "" {
-			c.conn.WriteJSON(map[string]string{"error": "invalid message format"})
+			c.sendJSON(map[string]string{"error": "invalid message format"})
+			continue
+		}
+
+		// Server-enforced anti-spam: style the blocked client like Discord so
+		// the cooldown is visible to the offending account only.
+		if ok, retryAfter := messageLimiter.Allow(c.userID, incoming.Content, time.Now()); !ok {
+			c.sendJSON(map[string]interface{}{
+				"error":       "slow_down",
+				"retry_after": retryAfter,
+			})
 			continue
 		}
 
@@ -86,19 +97,64 @@ func (c *Client) readPump() {
 		})
 		if err != nil {
 			log.Printf("create message failed: %v", err)
-			c.conn.WriteJSON(map[string]string{"error": "failed to send message"})
+			c.sendJSON(map[string]string{"error": "failed to send message"})
 			continue
 		}
 
+		sender := c.senderInfo()
 		payload, _ := json.Marshal(map[string]interface{}{
-			"id":        saved.ID,
-			"groupId":   c.groupID,
-			"senderId":  userIDString(saved.SenderID),
-			"content":   saved.Content,
-			"createdAt": saved.CreatedAt.Time.Format(time.RFC3339),
+			"id":           saved.ID,
+			"groupId":      c.groupID,
+			"senderId":     userIDString(saved.SenderID),
+			"content":      saved.Content,
+			"createdAt":    saved.CreatedAt.Time.Format(time.RFC3339),
+			"senderName":   sender.name,
+			"senderAvatar": sender.avatar,
+			"senderRole":   sender.role,
 		})
 
 		c.hub.broadcast <- &BroadcastMsg{groupID: c.groupID, data: payload}
+	}
+}
+
+// senderInfo snapshots the sender's current display identity so live messages
+// match what /messages/{id} returns.
+func (c *Client) senderInfo() (sender struct{ name, avatar, role string }) {
+	row, err := c.repos.Queries.GetUserByID(context.Background(), uuidFromString(c.userID))
+	if err != nil {
+		sender.name = "Staff"
+		return
+	}
+	sender.name = row.Name
+	if row.DisplayName.Valid && row.DisplayName.String != "" {
+		sender.name = row.DisplayName.String
+	}
+	if row.AvatarUrl.Valid {
+		sender.avatar = row.AvatarUrl.String
+	}
+	sender.role = string(row.Role)
+	return
+}
+
+func senderAvatarString(t pgtype.Text) string {
+	if t.Valid {
+		return t.String
+	}
+	return ""
+}
+
+// sendJSON queues an outbound message through writePump, which is the only
+// goroutine allowed to write to the connection. The hub may close the send
+// channel while readPump is mid-send, so the send is panic-protected.
+func (c *Client) sendJSON(v interface{}) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	defer func() { _ = recover() }()
+	select {
+	case c.send <- data:
+	default:
 	}
 }
 
@@ -198,8 +254,9 @@ func userIDString(u pgtype.UUID) string {
 }
 
 var (
-	messageHub    = newHub()
+	messageHub     = newHub()
 	messageHubOnce sync.Once
+	messageLimiter = newRateLimiter()
 )
 
 func Handlers(repos *db.Repos) chi.Router {
@@ -226,11 +283,9 @@ func handleWebSocket(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
-		_, err := repos.Queries.GetGroupMember(r.Context(), sqldb.GetGroupMemberParams{
-			GroupID: uuidFromString(groupID),
-			UserID:  uuidFromString(userID),
-		})
-		if err != nil {
+		me := middleware.GetUser(r)
+		groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, groupID)
+		if !groupAccess {
 			middleware.RespondError(w, http.StatusForbidden, "not a member of this group")
 			return
 		}
@@ -260,6 +315,13 @@ func listMessages(repos *db.Repos) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		groupID := chi.URLParam(r, "groupId")
 
+		me := middleware.GetUser(r)
+		groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, groupID)
+		if !groupAccess {
+			middleware.RespondError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
 		limit := 50
 		if l := r.URL.Query().Get("limit"); l != "" {
 			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {
@@ -286,11 +348,14 @@ func listMessages(repos *db.Repos) http.HandlerFunc {
 		for i := len(rows) - 1; i >= 0; i-- {
 			m := rows[i]
 			out = append(out, map[string]interface{}{
-				"id":        m.ID,
-				"groupId":   m.GroupID,
-				"senderId":  userIDString(m.SenderID),
-				"content":   m.Content,
-				"createdAt": m.CreatedAt.Time.Format(time.RFC3339),
+				"id":           m.ID,
+				"groupId":      m.GroupID,
+				"senderId":     userIDString(m.SenderID),
+				"content":      m.Content,
+				"createdAt":    m.CreatedAt.Time.Format(time.RFC3339),
+				"senderName":   m.SenderName,
+				"senderAvatar": senderAvatarString(m.SenderAvatar),
+				"senderRole":   m.SenderRole,
 			})
 		}
 
@@ -307,6 +372,13 @@ func searchMessages(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
+		me := middleware.GetUser(r)
+		groupAccess, _ := access.GroupPermissions(r.Context(), repos, me, groupID)
+		if !groupAccess {
+			middleware.RespondError(w, http.StatusNotFound, "group not found")
+			return
+		}
+
 		rows, err := repos.Queries.SearchMessagesInGroup(r.Context(), sqldb.SearchMessagesInGroupParams{
 			GroupID:        uuidFromString(groupID),
 			PlaintoTsquery: query,
@@ -320,11 +392,14 @@ func searchMessages(repos *db.Repos) http.HandlerFunc {
 		out := make([]map[string]interface{}, 0, len(rows))
 		for _, m := range rows {
 			out = append(out, map[string]interface{}{
-				"id":        m.ID,
-				"groupId":   m.GroupID,
-				"senderId":  userIDString(m.SenderID),
-				"content":   m.Content,
-				"createdAt": m.CreatedAt.Time.Format(time.RFC3339),
+				"id":           m.ID,
+				"groupId":      m.GroupID,
+				"senderId":     userIDString(m.SenderID),
+				"content":      m.Content,
+				"createdAt":    m.CreatedAt.Time.Format(time.RFC3339),
+				"senderName":   m.SenderName,
+				"senderAvatar": senderAvatarString(m.SenderAvatar),
+				"senderRole":   m.SenderRole,
 			})
 		}
 

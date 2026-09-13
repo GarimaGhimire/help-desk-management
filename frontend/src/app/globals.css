@@ -2,12 +2,90 @@
 @tailwind components;
 @tailwind utilities;
 
+::selection {
+  background-color: theme("colors.primary.200");
+  color: theme("colors.primary.900");
+}
+
 body {
   @apply bg-surface-50 text-surface-900 font-sans antialiased;
+}
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: theme("colors.surface.300") transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: theme("colors.surface.300");
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+}
+
+@layer components {
+  .animate-fade-in {
+    animation: fade-in 0.4s ease-out both;
+  }
+  .animate-fade-in-up {
+    animation: fade-in-up 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .animate-pop-in {
+    animation: pop-in 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .animate-progress {
+    animation: progress-grow linear both;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes progress-grow {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
   }
 }

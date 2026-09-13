@@ -18,6 +18,61 @@ export function getCurrentUserId(): string | null {
   }
 }
 
+export type AuthUser = {
+  id: string;
+  role: string;
+  org: string;
+  mustChangePassword: boolean;
+};
+
+export type Profile = {
+  id: string;
+  name: string;
+  display_name: string;
+  email: string;
+  phone: string;
+  avatar_url: string;
+  role: string;
+  org_id: string;
+  language_pref: string;
+  must_change_password: boolean;
+  created_at: string;
+  last_login_at?: string;
+  org?: { id: string; name: string; slug: string } | null;
+};
+
+export function roleLabelKey(role: string): string {
+  if (["superadmin", "org_admin", "group_admin", "org_member"].includes(role)) return role;
+  return "org_member";
+}
+
+// assetUrl turns a server-relative path (e.g. "/avatars/x.png") into an
+// absolute URL against the API host.
+export function assetUrl(path?: string | null): string | null {
+  if (!path) return null;
+  if (/^https?:\/\//.test(path)) return path;
+  return `${API_URL}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+// getAuthUser decodes role/org from the access token (kept in sync by the API
+// on every request, so role changes are reflected on next token refresh).
+export function getAuthUser(): AuthUser | null {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const payload = token.split(".")[1];
+    const decoded = JSON.parse(atob(payload.replace(/-/g, "+").replace(/_/g, "/")));
+    return {
+      id: decoded.sub || "",
+      role: decoded.role || "",
+      org: decoded.org || "",
+      mustChangePassword: false,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = getToken();
 
@@ -44,6 +99,14 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       window.location.href = "/login";
     }
     throw new Error("unauthorized");
+  }
+
+  // 428 = account needs a new password before any other access.
+  if (res.status === 428) {
+    if (typeof window !== "undefined") {
+      window.location.href = "/change-password";
+    }
+    throw new Error("password change required");
   }
 
   if (!res.ok) {
@@ -73,4 +136,8 @@ export const api = {
 
 export function isLoggedIn(): boolean {
   return getToken() !== null;
+}
+
+export function homeForRole(role?: string): string {
+  return role === "superadmin" ? "/admin" : "/groups";
 }

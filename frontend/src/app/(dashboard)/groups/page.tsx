@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useI18n } from "@/lib/i18n";
-import { api } from "@/lib/api";
-import { useEffect, useState } from "react";
+import { api, getAuthUser, homeForRole } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
 
 interface Group {
   id: string;
@@ -14,6 +15,7 @@ interface Group {
 
 export default function GroupsPage() {
   const { t } = useI18n();
+  const router = useRouter();
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -22,11 +24,17 @@ export default function GroupsPage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
 
-  const fetchGroups = () => {
+  const fetchGroups = useCallback(() => {
     api.get<Group[]>("/groups").then(setGroups).catch(() => {}).finally(() => setLoading(false));
-  };
+  }, []);
 
-  useEffect(() => { fetchGroups(); }, []);
+  useEffect(() => {
+    if (getAuthUser()?.role === "superadmin") {
+      router.replace(homeForRole("superadmin"));
+      return;
+    }
+    fetchGroups();
+  }, [router, fetchGroups]);
 
   const createGroup = async () => {
     if (!newName.trim()) return;

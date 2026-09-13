@@ -1,5 +1,15 @@
-import { redirect } from "next/navigation";
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { getAuthUser, homeForRole } from "@/lib/api";
 
 export default function Home() {
-  redirect("/groups");
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace(homeForRole(getAuthUser()?.role));
+  }, [router]);
+
+  return null;
 }
