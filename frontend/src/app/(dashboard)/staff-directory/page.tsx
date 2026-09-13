@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useI18n } from "@/lib/i18n";
 import { api, getAuthUser } from "@/lib/api";
 import { StaffSkeleton } from "@/components/ui/skeleton";
@@ -49,12 +49,8 @@ export default function StaffDirectoryPage() {
   const [editError, setEditError] = useState("");
 
   // Roles & Positions state
-  const [customRoles, setCustomRoles] = useState<{ id: string; name: string }[]>([]);
   const [positions, setPositions] = useState<{ id: string; name: string }[]>([]);
-  const [roleModalOpen, setRoleModalOpen] = useState(false);
   const [positionModalOpen, setPositionModalOpen] = useState(false);
-  const [newRoleName, setNewRoleName] = useState("");
-  const [newRoleDesc, setNewRoleDesc] = useState("");
   const [newPosName, setNewPosName] = useState("");
   const [newPosDesc, setNewPosDesc] = useState("");
   const [creatingItem, setCreatingItem] = useState(false);
@@ -75,11 +71,7 @@ export default function StaffDirectoryPage() {
 
   const fetchRolesAndPositions = async () => {
     try {
-      const [rData, pData] = await Promise.all([
-        api.get<{ id: string; name: string }[]>("/roles/custom-roles"),
-        api.get<{ id: string; name: string }[]>("/roles/positions"),
-      ]);
-      setCustomRoles(rData);
+      const pData = await api.get<{ id: string; name: string }[]>("/roles/positions");
       setPositions(pData);
     } catch {
       // ignore
@@ -166,27 +158,6 @@ export default function StaffDirectoryPage() {
       );
     } finally {
       setUpdatingRole(false);
-    }
-  };
-
-  const handleCreateRole = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newRoleName.trim()) return;
-    setCreatingItem(true);
-    setModalItemError("");
-    try {
-      await api.post("/roles/custom-roles", {
-        name: newRoleName.trim(),
-        description: newRoleDesc.trim(),
-      });
-      setNewRoleName("");
-      setNewRoleDesc("");
-      setRoleModalOpen(false);
-      fetchRolesAndPositions();
-    } catch (err) {
-      setModalItemError(err instanceof Error ? err.message : "Failed to create role");
-    } finally {
-      setCreatingItem(false);
     }
   };
 
