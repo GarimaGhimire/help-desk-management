@@ -16,6 +16,7 @@ import (
 	"github.com/fintara/helpdesk/internal/documents"
 	"github.com/fintara/helpdesk/internal/groups"
 	"github.com/fintara/helpdesk/internal/messages"
+	"github.com/fintara/helpdesk/internal/notifications"
 	"github.com/fintara/helpdesk/internal/profile"
 	"github.com/fintara/helpdesk/internal/roles"
 	"github.com/fintara/helpdesk/internal/search"
@@ -98,6 +99,7 @@ func main() {
 		r.Mount("/groups", groups.Handlers(repos))
 		r.Mount("/messages", messages.Handlers(repos))
 		r.Mount("/documents", documents.Handlers(repos))
+		r.Mount("/notifications", notifications.NewHandler(repos).Routes())
 		r.Mount("/search", search.Handlers(repos))
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireRole("superadmin", "org_admin"))

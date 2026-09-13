@@ -106,13 +106,6 @@ export default function ChatPage() {
 
   const [groupName, setGroupName] = useState<string>("");
 
-  useEffect(() => {
-    setUserRole(getAuthUser()?.role || null);
-    api.get<{ id: string; name: string }>(`/groups/${id}`)
-      .then((g) => setGroupName(g.name))
-      .catch(() => {});
-  }, [id]);
-
   const fetchMembers = useCallback(async () => {
     setLoadingMembers(true);
     setMemberError("");
@@ -125,6 +118,14 @@ export default function ChatPage() {
       setLoadingMembers(false);
     }
   }, [id]);
+
+  useEffect(() => {
+    setUserRole(getAuthUser()?.role || null);
+    api.get<{ id: string; name: string }>(`/groups/${id}`)
+      .then((g) => setGroupName(g.name))
+      .catch(() => {});
+    fetchMembers();
+  }, [id, fetchMembers]);
 
   const fetchAllUsers = useCallback(async () => {
     try {
@@ -573,7 +574,22 @@ export default function ChatPage() {
                     </div>
                   );
                 }
-                return line ? <p key={idx}>{line}</p> : <br key={idx} />;
+                return line ? (
+                  <p key={idx}>
+                    {line.split(/(@[A-Za-z0-9_\-\s]+)/g).map((part, pIdx) =>
+                      part.startsWith("@") ? (
+                        <span
+                          key={pIdx}
+                          className="font-semibold text-brand-600 dark:text-brand-400 bg-brand-50 dark:bg-brand-950/40 px-1 py-0.5 rounded"
+                        >
+                          {part}
+                        </span>
+                      ) : (
+                        part
+                      )
+                    )}
+                  </p>
+                ) : <br key={idx} />;
               });
             };
 
@@ -888,10 +904,48 @@ export default function ChatPage() {
                 ? `Type reply to ${replyingTo.senderName || "Staff"}…`
                 : cooldown > 0
                 ? `${t.chat.retryIn} ${cooldown}${t.chat.seconds}…`
-                : t.chat.typeMessage
+                : "Type message (@ to mention staff)..."
             }
             className="flex-1 px-2 py-2 rounded-xl text-sm placeholder:text-surface-400 bg-transparent focus:outline-none disabled:opacity-60"
           />
+
+          {/* @mention autocomplete popup */}
+          {input.includes("@") && (
+            <div className="absolute bottom-16 left-12 w-64 bg-white border border-surface-200 rounded-xl shadow-lg z-30 max-h-48 overflow-y-auto">
+              <div className="px-3 py-1.5 text-[11px] font-semibold text-surface-400 border-b border-surface-100">
+                Mention Staff
+              </div>
+              {members.filter((m) => m.user_id !== myId).length === 0 ? (
+                <div className="px-3 py-3 text-xs text-surface-400 text-center">
+                  No other members in group
+                </div>
+              ) : (
+                members
+                  .filter((m) => {
+                    if (m.user_id === myId) return false;
+                    const lastAtIndex = input.lastIndexOf("@");
+                    const query = input.slice(lastAtIndex + 1).toLowerCase();
+                    const name = m.user_name || "";
+                    return name.toLowerCase().includes(query);
+                  })
+                  .map((m) => (
+                    <button
+                      key={m.user_id}
+                      type="button"
+                      onClick={() => {
+                        const lastAtIndex = input.lastIndexOf("@");
+                        const prefix = input.slice(0, lastAtIndex);
+                        setInput(`${prefix}@${m.user_name} `);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs text-surface-800 hover:bg-surface-100 flex items-center justify-between border-b border-surface-50 last:border-0"
+                    >
+                      <span className="font-medium">{m.user_name}</span>
+                      <span className="text-[10px] text-surface-400 font-mono">{m.role_in_group}</span>
+                    </button>
+                  ))
+              )}
+            </div>
+          )}
           <button
             onClick={sendMessage}
             disabled={(!input.trim() && pendingAttachments.length === 0) || !isConnected || cooldown > 0 || uploadingFile}

@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import NavLinks from "./nav-links";
 import BrandLink from "./brand-link";
 import LocaleToggle from "./locale-toggle";
+import NotificationBell from "./notification-bell";
 import ProfileMenu from "./profile-menu";
 import SuspensionOverlay from "./suspension-overlay";
 
@@ -75,6 +76,7 @@ export default function DashboardLayout({
         <header className="h-16 bg-white/80 backdrop-blur-sm border-b border-surface-200 flex items-center justify-between px-6 sticky top-0 z-40">
           <div />
           <div className="flex items-center gap-3">
+            <NotificationBell />
             <LocaleToggle />
             <ProfileMenu />
           </div>

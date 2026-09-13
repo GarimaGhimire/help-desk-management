@@ -142,6 +142,76 @@ func (c *Client) readPump() {
 
 		payload, _ := json.Marshal(msgPayload)
 		c.hub.broadcast <- &BroadcastMsg{groupID: c.groupID, data: payload}
+
+		// Asynchronously generate notifications (mentions, replies, unreads)
+		go createNotificationsForMessage(c.repos, saved, c.groupID, c.userID)
+	}
+}
+
+func createNotificationsForMessage(repos *db.Repos, msg sqldb.CreateMessageRow, groupIDStr, senderIDStr string) {
+	ctx := context.Background()
+	groupID := uuidFromString(groupIDStr)
+	senderID := uuidFromString(senderIDStr)
+
+	// Fetch group members
+	members, err := repos.Queries.ListGroupMembers(ctx, groupID)
+	if err != nil {
+		return
+	}
+
+	notifiedUserIDs := make(map[string]bool)
+
+	// 1. Process Reply notification
+	if msg.ReplyToID.Valid {
+		if repliedMsg, err := repos.Queries.GetMessageByID(ctx, msg.ReplyToID); err == nil {
+			repliedSenderID := userIDString(repliedMsg.SenderID)
+			if repliedSenderID != senderIDStr {
+				_, _ = repos.Queries.CreateNotification(ctx, sqldb.CreateNotificationParams{
+					UserID:    repliedMsg.SenderID,
+					ActorID:   senderID,
+					GroupID:   groupID,
+					MessageID: msg.ID,
+					Type:      "reply",
+				})
+				notifiedUserIDs[repliedSenderID] = true
+			}
+		}
+	}
+
+	// 2. Process Mentions
+	for _, member := range members {
+		mID := userIDString(member.UserID)
+		if mID == senderIDStr || notifiedUserIDs[mID] {
+			continue
+		}
+		// Match handle or user name in content (e.g. "@UserName")
+		contentLower := strings.ToLower(msg.Content)
+		nameToMatch := strings.ToLower(member.UserName)
+		if nameToMatch != "" && strings.Contains(contentLower, "@"+nameToMatch) {
+			_, _ = repos.Queries.CreateNotification(ctx, sqldb.CreateNotificationParams{
+				UserID:    member.UserID,
+				ActorID:   senderID,
+				GroupID:   groupID,
+				MessageID: msg.ID,
+				Type:      "mention",
+			})
+			notifiedUserIDs[mID] = true
+		}
+	}
+
+	// 3. Process Unreads for remaining group members
+	for _, member := range members {
+		mID := userIDString(member.UserID)
+		if mID == senderIDStr || notifiedUserIDs[mID] {
+			continue
+		}
+		_, _ = repos.Queries.CreateNotification(ctx, sqldb.CreateNotificationParams{
+			UserID:    member.UserID,
+			ActorID:   senderID,
+			GroupID:   groupID,
+			MessageID: msg.ID,
+			Type:      "unread",
+		})
 	}
 }
 
