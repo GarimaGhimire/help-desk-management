@@ -1,14 +1,13 @@
 package documents
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
 	internaldb "github.com/fintara/helpdesk/internal/db"
 	"github.com/fintara/helpdesk/pkg/db"
@@ -17,23 +16,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const maxDocumentBytes = 50 << 20 // 50 MiB
-
-func uploadDir() string {
-	dir := os.Getenv("UPLOAD_DIR")
-	if dir == "" {
-		dir = "./data/uploads"
-	}
-	return filepath.Join(dir, "documents")
+type DocumentResponse struct {
+	ID           string           `json:"id"`
+	UploadedBy   string           `json:"uploaded_by"`
+	UploaderName string           `json:"uploader_name"`
+	GroupID      string           `json:"group_id,omitempty"`
+	Filename     string           `json:"filename"`
+	MimeType     string           `json:"mime_type"`
+	Visibility   string           `json:"visibility"`
+	AllowedRoles []string         `json:"allowed_roles"`
+	AllowedUsers []UserAccessInfo `json:"allowed_users"`
+	CreatedAt    string           `json:"created_at"`
 }
 
-// DocumentFileHandler serves stored document files.
-func DocumentFileHandler() http.Handler {
-	dir := os.Getenv("UPLOAD_DIR")
-	if dir == "" {
-		dir = "./data/uploads"
-	}
-	return http.StripPrefix("/documents/files/", http.FileServer(http.Dir(filepath.Join(dir, "documents"))))
+type UserAccessInfo struct {
+	UserID   string `json:"user_id"`
+	UserName string `json:"user_name"`
+	Email    string `json:"email"`
 }
 
 func Handlers(repos *db.Repos) chi.Router {
@@ -41,9 +40,9 @@ func Handlers(repos *db.Repos) chi.Router {
 	r.Post("/upload", uploadDocument(repos))
 	r.Get("/", listDocuments(repos))
 	r.Route("/{id}", func(r chi.Router) {
-		r.Get("/", getDocument(repos))
+		r.Get("/download", downloadDocument(repos))
 		r.Patch("/visibility", updateVisibility(repos))
-		r.Post("/unlock", unlockDocument(repos))
+		r.Delete("/", deleteDocument(repos))
 	})
 	return r
 }
@@ -56,89 +55,90 @@ func uploadDocument(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
-		if err := r.ParseMultipartForm(maxDocumentBytes); err != nil {
-			middleware.RespondError(w, http.StatusBadRequest, "invalid upload: file too large or bad request")
+		if err := r.ParseMultipartForm(50 << 20); err != nil {
+			middleware.RespondError(w, http.StatusBadRequest, "invalid upload or file exceeds 50MB")
 			return
 		}
 
 		file, header, err := r.FormFile("file")
 		if err != nil {
-			middleware.RespondError(w, http.StatusBadRequest, "file field is required")
+			middleware.RespondError(w, http.StatusBadRequest, "file is required")
 			return
 		}
 		defer file.Close()
 
-		data, err := io.ReadAll(io.LimitReader(file, maxDocumentBytes))
+		// Read the entire file into memory — no disk writes
+		fileBytes, err := io.ReadAll(file)
 		if err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to read file")
-			return
-		}
-		if len(data) == 0 {
-			middleware.RespondError(w, http.StatusBadRequest, "file is empty")
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to read file contents")
 			return
 		}
 
-		// Sanitize filename: keep extension, prefix with timestamp+userID
-		origName := header.Filename
-		ext := filepath.Ext(origName)
-		base := strings.TrimSuffix(origName, ext)
-		if len(base) > 100 {
-			base = base[:100]
+		visibility := r.FormValue("visibility")
+		if visibility == "" {
+			visibility = "all"
 		}
-		suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-		storedName := suffix + "-" + sanitize(base) + ext
-		dir := uploadDir()
-
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to prepare uploads directory")
+		if visibility != "all" && visibility != "admins" && visibility != "restricted" && visibility != "custom" {
+			middleware.RespondError(w, http.StatusBadRequest, "invalid visibility setting")
 			return
 		}
 
-		dst := filepath.Join(dir, storedName)
-		if err := os.WriteFile(dst, data, 0o600); err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to store file")
-			return
+		var allowedRoles []string
+		if rolesStr := r.FormValue("allowed_roles"); rolesStr != "" {
+			_ = json.Unmarshal([]byte(rolesStr), &allowedRoles)
+		}
+		if allowedRoles == nil {
+			allowedRoles = []string{}
 		}
 
-		visibility := internaldb.DocVisibilityAll
-		vis := r.FormValue("visibility")
-		if vis == "restricted" {
-			visibility = internaldb.DocVisibilityRestricted
+		var allowedUserIDs []string
+		if usersStr := r.FormValue("allowed_users"); usersStr != "" {
+			_ = json.Unmarshal([]byte(usersStr), &allowedUserIDs)
 		}
 
-		doc, err := repos.Queries.CreateDocument(r.Context(), internaldb.CreateDocumentParams{
+		filename := filepath.Base(header.Filename)
+
+		// Detect MIME type from the file header bytes
+		mimeType := http.DetectContentType(fileBytes)
+		// Also try to get a more precise type from the extension
+		if extMime := mime.TypeByExtension(filepath.Ext(filename)); extMime != "" {
+			mimeType = extMime
+		}
+
+		docParams := internaldb.CreateDocumentParams{
 			UploadedBy:   db.ParseUUID(me.ID),
-			GroupID:      pgtype.UUID{}, // no group scope for now
-			Filename:     origName,
-			StoragePath:  storedName,
+			GroupID:      pgtype.UUID{},
+			Filename:     filename,
+			MimeType:     mimeType,
+			FileData:     fileBytes,
 			Visibility:   visibility,
-			PasswordHash: pgtype.Text{},
-		})
+			AllowedRoles: allowedRoles,
+		}
+
+		docRow, err := repos.Queries.CreateDocument(r.Context(), docParams)
 		if err != nil {
-			_ = os.Remove(dst)
 			middleware.RespondError(w, http.StatusInternalServerError, "failed to save document record")
 			return
 		}
 
-		middleware.RespondJSON(w, http.StatusCreated, map[string]interface{}{
-			"id":          db.UUIDString(doc.ID),
-			"filename":    doc.Filename,
-			"visibility":  doc.Visibility,
-			"uploaded_by": me.Name,
-			"created_at":  doc.CreatedAt.Time,
-			"size":        len(data),
+		docIDStr := db.UUIDString(docRow.ID)
+
+		if visibility == "custom" && len(allowedUserIDs) > 0 {
+			for _, uid := range allowedUserIDs {
+				if uid != "" {
+					_ = repos.Queries.GrantDocumentAccess(r.Context(), internaldb.GrantDocumentAccessParams{
+						DocumentID: docRow.ID,
+						UserID:     db.ParseUUID(uid),
+					})
+				}
+			}
+		}
+
+		middleware.RespondJSON(w, http.StatusCreated, map[string]any{
+			"message": "Document uploaded successfully",
+			"id":      docIDStr,
 		})
 	}
-}
-
-type docResponse struct {
-	ID           string    `json:"id"`
-	Filename     string    `json:"filename"`
-	Visibility   string    `json:"visibility"`
-	UploadedByID string    `json:"uploaded_by_id"`
-	UploadedBy   string    `json:"uploaded_by"`
-	CreatedAt    time.Time `json:"created_at"`
-	Size         int64     `json:"size"`
 }
 
 func listDocuments(repos *db.Repos) http.HandlerFunc {
@@ -149,39 +149,84 @@ func listDocuments(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
-		rows, err := repos.Queries.ListDocumentsForUser(r.Context(), db.ParseUUID(me.ID))
+		docs, err := repos.Queries.ListAllDocuments(r.Context())
 		if err != nil {
 			middleware.RespondError(w, http.StatusInternalServerError, "failed to list documents")
 			return
 		}
 
-		dir := uploadDir()
-		result := make([]docResponse, 0, len(rows))
-		for _, row := range rows {
-			// Get file size from disk
-			var size int64
-			if info, err := os.Stat(filepath.Join(dir, row.StoragePath)); err == nil {
-				size = info.Size()
-			}
+		result := []DocumentResponse{}
+		isAdmin := me.Role == "org_admin" || me.Role == "staff_admin" || me.Role == "superadmin"
 
-			// Resolve uploader name
-			uploaderName := "Unknown"
-			if user, err := repos.Queries.GetUserByID(r.Context(), row.UploadedBy); err == nil {
-				if user.DisplayName.Valid && user.DisplayName.String != "" {
-					uploaderName = user.DisplayName.String
-				} else {
-					uploaderName = user.Name
+		for _, d := range docs {
+			uploaderIDStr := db.UUIDString(d.UploadedBy)
+			docIDStr := db.UUIDString(d.ID)
+
+			// Visibility Check
+			canAccess := false
+			if uploaderIDStr == me.ID {
+				canAccess = true
+			} else {
+				switch d.Visibility {
+				case "all":
+					canAccess = true
+				case "admins":
+					if isAdmin {
+						canAccess = true
+					}
+				case "restricted":
+					// strictly only uploader, not even admins!
+					canAccess = false
+				case "custom":
+					// Check allowed roles
+					for _, role := range d.AllowedRoles {
+						if role == me.Role {
+							canAccess = true
+							break
+						}
+					}
+					// Check custom allowed users if not yet matched by role
+					if !canAccess {
+						accessList, _ := repos.Queries.GetDocumentAccessList(r.Context(), d.ID)
+						for _, u := range accessList {
+							if db.UUIDString(u.UserID) == me.ID {
+								canAccess = true
+								break
+							}
+						}
+					}
+				}
+
+				if !canAccess {
+					continue
 				}
 			}
 
-			result = append(result, docResponse{
-				ID:           db.UUIDString(row.ID),
-				Filename:     row.Filename,
-				Visibility:   string(row.Visibility),
-				UploadedByID: db.UUIDString(row.UploadedBy),
-				UploadedBy:   uploaderName,
-				CreatedAt:    row.CreatedAt.Time,
-				Size:         size,
+			accessList, _ := repos.Queries.GetDocumentAccessList(r.Context(), d.ID)
+			allowedUsers := []UserAccessInfo{}
+			for _, u := range accessList {
+				allowedUsers = append(allowedUsers, UserAccessInfo{
+					UserID:   db.UUIDString(u.UserID),
+					UserName: u.UserName,
+					Email:    u.Email.String,
+				})
+			}
+
+			allowedRoles := d.AllowedRoles
+			if allowedRoles == nil {
+				allowedRoles = []string{}
+			}
+
+			result = append(result, DocumentResponse{
+				ID:           docIDStr,
+				UploadedBy:   uploaderIDStr,
+				UploaderName: d.UploaderName,
+				Filename:     d.Filename,
+				MimeType:     d.MimeType,
+				Visibility:   d.Visibility,
+				AllowedRoles: allowedRoles,
+				AllowedUsers: allowedUsers,
+				CreatedAt:    d.CreatedAt.Time.Format("2006-01-02 15:04:05"),
 			})
 		}
 
@@ -189,7 +234,7 @@ func listDocuments(repos *db.Repos) http.HandlerFunc {
 	}
 }
 
-func getDocument(repos *db.Repos) http.HandlerFunc {
+func downloadDocument(repos *db.Repos) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		me := middleware.GetUser(r)
 		if me == nil {
@@ -197,68 +242,159 @@ func getDocument(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
-		id := chi.URLParam(r, "id")
-		row, err := repos.Queries.GetDocument(r.Context(), db.ParseUUID(id))
+		docIDStr := chi.URLParam(r, "id")
+		doc, err := repos.Queries.GetDocument(r.Context(), db.ParseUUID(docIDStr))
 		if err != nil {
 			middleware.RespondError(w, http.StatusNotFound, "document not found")
 			return
 		}
 
-		dir := uploadDir()
-		fpath := filepath.Join(dir, row.StoragePath)
+		uploaderIDStr := db.UUIDString(doc.UploadedBy)
+		isAdmin := me.Role == "org_admin" || me.Role == "staff_admin" || me.Role == "superadmin"
 
-		// Check access
-		hasAccess, err := repos.Queries.HasDocumentAccess(r.Context(), internaldb.HasDocumentAccessParams{
-			ID:         db.ParseUUID(id),
-			UploadedBy: db.ParseUUID(me.ID),
-		})
-		if err != nil || !hasAccess {
-			middleware.RespondError(w, http.StatusForbidden, "access denied")
+		canAccess := false
+		if uploaderIDStr == me.ID {
+			canAccess = true
+		} else {
+			switch doc.Visibility {
+			case "all":
+				canAccess = true
+			case "admins":
+				if isAdmin {
+					canAccess = true
+				}
+			case "restricted":
+				// Strictly only uploader, not even admins!
+				canAccess = false
+			case "custom":
+				for _, role := range doc.AllowedRoles {
+					if role == me.Role {
+						canAccess = true
+						break
+					}
+				}
+				if !canAccess {
+					accessList, _ := repos.Queries.GetDocumentAccessList(r.Context(), doc.ID)
+					for _, u := range accessList {
+						if db.UUIDString(u.UserID) == me.ID {
+							canAccess = true
+							break
+						}
+					}
+				}
+			}
+		}
+
+		if !canAccess {
+			middleware.RespondError(w, http.StatusForbidden, "you do not have access to view or download this document")
 			return
 		}
 
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, row.Filename))
-		http.ServeFile(w, r, fpath)
+		// Serve file bytes directly from the database — no filesystem access
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", doc.Filename))
+		w.Header().Set("Content-Type", doc.MimeType)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(doc.FileData)))
+		http.ServeContent(w, r, doc.Filename, doc.CreatedAt.Time, bytes.NewReader(doc.FileData))
 	}
 }
 
 func updateVisibility(repos *db.Repos) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		me := middleware.GetUser(r)
+		if me == nil {
+			middleware.RespondError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		docIDStr := chi.URLParam(r, "id")
+		doc, err := repos.Queries.GetDocument(r.Context(), db.ParseUUID(docIDStr))
+		if err != nil {
+			middleware.RespondError(w, http.StatusNotFound, "document not found")
+			return
+		}
+
+		uploaderIDStr := db.UUIDString(doc.UploadedBy)
+		isAdmin := me.Role == "org_admin" || me.Role == "staff_admin" || me.Role == "superadmin"
+		if uploaderIDStr != me.ID && !isAdmin {
+			middleware.RespondError(w, http.StatusForbidden, "only the uploader or admins can change document settings")
+			return
+		}
+
 		var req struct {
-			Visibility string `json:"visibility"`
+			Visibility   string   `json:"visibility"`
+			AllowedRoles []string `json:"allowed_roles"`
+			AllowedUsers []string `json:"allowed_users"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			middleware.RespondError(w, http.StatusBadRequest, "visibility is required")
+			middleware.RespondError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		_ = repos
-		middleware.RespondMessage(w, http.StatusOK, "visibility updated")
+
+		if req.Visibility != "all" && req.Visibility != "admins" && req.Visibility != "restricted" && req.Visibility != "custom" {
+			middleware.RespondError(w, http.StatusBadRequest, "invalid visibility setting")
+			return
+		}
+
+		if req.AllowedRoles == nil {
+			req.AllowedRoles = []string{}
+		}
+
+		_, err = repos.Queries.UpdateDocumentVisibility(r.Context(), internaldb.UpdateDocumentVisibilityParams{
+			ID:           doc.ID,
+			Visibility:   req.Visibility,
+			AllowedRoles: req.AllowedRoles,
+		})
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to update visibility")
+			return
+		}
+
+		// Update document_access list
+		_ = repos.Queries.ClearDocumentAccessList(r.Context(), doc.ID)
+		if req.Visibility == "custom" && len(req.AllowedUsers) > 0 {
+			for _, uid := range req.AllowedUsers {
+				if uid != "" {
+					_ = repos.Queries.GrantDocumentAccess(r.Context(), internaldb.GrantDocumentAccessParams{
+						DocumentID: doc.ID,
+						UserID:     db.ParseUUID(uid),
+					})
+				}
+			}
+		}
+
+		middleware.RespondMessage(w, http.StatusOK, "document access settings updated")
 	}
 }
 
-func unlockDocument(repos *db.Repos) http.HandlerFunc {
+func deleteDocument(repos *db.Repos) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Password string `json:"password"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Password == "" {
-			middleware.RespondError(w, http.StatusBadRequest, "password is required")
+		me := middleware.GetUser(r)
+		if me == nil {
+			middleware.RespondError(w, http.StatusUnauthorized, "authentication required")
 			return
 		}
-		_ = repos
-		middleware.RespondMessage(w, http.StatusOK, "document unlocked")
-	}
-}
 
-// sanitize replaces spaces and special chars with underscores for safe filenames.
-func sanitize(s string) string {
-	var b strings.Builder
-	for _, c := range s {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' {
-			b.WriteRune(c)
-		} else {
-			b.WriteRune('_')
+		docIDStr := chi.URLParam(r, "id")
+		doc, err := repos.Queries.GetDocument(r.Context(), db.ParseUUID(docIDStr))
+		if err != nil {
+			middleware.RespondError(w, http.StatusNotFound, "document not found")
+			return
 		}
+
+		uploaderIDStr := db.UUIDString(doc.UploadedBy)
+		isAdmin := me.Role == "org_admin" || me.Role == "staff_admin" || me.Role == "superadmin"
+		if uploaderIDStr != me.ID && !isAdmin {
+			middleware.RespondError(w, http.StatusForbidden, "only the uploader or admins can delete this document")
+			return
+		}
+
+		// No filesystem cleanup needed — data lives only in the database
+		_ = repos.Queries.ClearDocumentAccessList(r.Context(), doc.ID)
+		if err := repos.Queries.DeleteDocument(r.Context(), doc.ID); err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to delete document record")
+			return
+		}
+
+		middleware.RespondMessage(w, http.StatusOK, "document deleted successfully")
 	}
-	return b.String()
 }

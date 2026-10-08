@@ -16,7 +16,9 @@ import (
 	"github.com/fintara/helpdesk/internal/documents"
 	"github.com/fintara/helpdesk/internal/groups"
 	"github.com/fintara/helpdesk/internal/messages"
+	"github.com/fintara/helpdesk/internal/notifications"
 	"github.com/fintara/helpdesk/internal/profile"
+	"github.com/fintara/helpdesk/internal/roles"
 	"github.com/fintara/helpdesk/internal/search"
 	"github.com/fintara/helpdesk/internal/users"
 	"github.com/fintara/helpdesk/pkg/db"
@@ -71,11 +73,13 @@ func main() {
 	allowedOrigins := []string{"http://localhost:3000", "http://localhost:3001"}
 	if origins := os.Getenv("CORS_ORIGINS"); origins != "" {
 		allowedOrigins = strings.Split(origins, ",")
+	} else if os.Getenv("ENV") == "production" {
+		log.Println("WARNING: CORS_ORIGINS is not configured in production; falling back to localhost")
 	}
 
 	c := cors.New(cors.Options{
 		AllowedOrigins:   allowedOrigins,
-		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PATCH", "DELETE", "HEAD", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type"},
 		AllowCredentials: true,
 	})
@@ -87,15 +91,19 @@ func main() {
 	})
 
 	r.Mount("/auth", auth.Handlers(repos, mail))
-	r.Mount("/avatars", profile.AvatarHandler())
-	r.Mount("/documents/files", documents.DocumentFileHandler())
+	r.Get("/avatars/{filename}", profile.AvatarHandler(repos))
+	r.Head("/avatars/{filename}", profile.AvatarHandler(repos))
+	r.Get("/attachments/{filename}", messages.AttachmentHandler(repos))
+	r.Head("/attachments/{filename}", messages.AttachmentHandler(repos))
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Auth(repos))
 		r.Mount("/me", profile.Handlers(repos))
 		r.Mount("/users", users.Handlers(repos, mail))
+		r.Mount("/roles", roles.Handlers(repos))
 		r.Mount("/groups", groups.Handlers(repos))
 		r.Mount("/messages", messages.Handlers(repos))
 		r.Mount("/documents", documents.Handlers(repos))
+		r.Mount("/notifications", notifications.NewHandler(repos).Routes())
 		r.Mount("/search", search.Handlers(repos))
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireRole("superadmin", "org_admin"))
@@ -106,9 +114,9 @@ func main() {
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%s", port),
 		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  60 * time.Second,
+		WriteTimeout: 300 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {

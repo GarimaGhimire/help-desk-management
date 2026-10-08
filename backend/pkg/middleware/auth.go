@@ -165,8 +165,11 @@ func Auth(repos *db.Repos) func(http.Handler) http.Handler {
 			if user.OrgID != "" {
 				org, err := repos.Queries.GetOrganization(r.Context(), db.ParseUUID(user.OrgID))
 				if err != nil || !org.IsActive {
-					RespondError(w, http.StatusForbidden, "organization is suspended")
-					return
+					reqPath := r.URL.Path
+					if reqPath != "/me" && reqPath != "/auth/me" && reqPath != "/auth/logout" && !strings.HasPrefix(reqPath, "/me") && !strings.HasPrefix(reqPath, "/auth/") {
+						RespondError(w, http.StatusForbidden, "organization is suspended")
+						return
+					}
 				}
 			}
 

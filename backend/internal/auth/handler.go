@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -84,7 +83,7 @@ func (s *Service) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, _, err := s.issueAccessToken(r.Context(), &user)
+	token, _, err := s.issueAccessToken(r, &user)
 	if err != nil {
 		middleware.RespondError(w, http.StatusInternalServerError, "failed to sign in")
 		return
@@ -245,7 +244,7 @@ func (s *Service) verifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, _, err := s.issueAccessToken(r.Context(), &user)
+	token, _, err := s.issueAccessToken(r, &user)
 	if err != nil {
 		middleware.RespondError(w, http.StatusInternalServerError, "failed to sign in")
 		return
@@ -425,7 +424,7 @@ func (s *Service) me(w http.ResponseWriter, r *http.Request) {
 
 // ------------------------------ helpers ------------------------------
 
-func (s *Service) issueAccessToken(ctx context.Context, user *sqldb.GetUserAuthByContactRow) (string, interface{}, error) {
+func (s *Service) issueAccessToken(r *http.Request, user *sqldb.GetUserAuthByContactRow) (string, interface{}, error) {
 	token, claims, err := middleware.SignToken(
 		db.UUIDString(user.ID), string(user.Role), db.UUIDString(user.OrgID),
 		middleware.AccessTokenTTL, middleware.ClaimsTypeAccess,
@@ -434,11 +433,20 @@ func (s *Service) issueAccessToken(ctx context.Context, user *sqldb.GetUserAuthB
 		return "", nil, err
 	}
 
-	_, err = s.repos.Queries.CreateSession(ctx, sqldb.CreateSessionParams{
+	ip := r.Header.Get("X-Forwarded-For")
+	if ip == "" {
+		ip = r.RemoteAddr
+	}
+	if idx := strings.Index(ip, ","); idx != -1 {
+		ip = strings.TrimSpace(ip[:idx])
+	}
+	ua := r.Header.Get("User-Agent")
+
+	_, err = s.repos.Queries.CreateSession(r.Context(), sqldb.CreateSessionParams{
 		UserID:    user.ID,
 		TokenHash: middleware.SessionTokenHash(claims.ID),
-		UserAgent: db.ParseText(""),
-		IpAddress: db.ParseText(""),
+		UserAgent: db.ParseText(ua),
+		IpAddress: db.ParseText(ip),
 		ExpiresAt: pgtype.Timestamptz{Time: time.Now().Add(middleware.AccessTokenTTL), Valid: true},
 	})
 	if err != nil {

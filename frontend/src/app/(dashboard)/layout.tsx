@@ -4,7 +4,9 @@ import { redirect } from "next/navigation";
 import NavLinks from "./nav-links";
 import BrandLink from "./brand-link";
 import LocaleToggle from "./locale-toggle";
+import NotificationBell from "./notification-bell";
 import ProfileMenu from "./profile-menu";
+import SuspensionOverlay from "./suspension-overlay";
 
 import en from "@/locales/en.json";
 import ne from "@/locales/ne.json";
@@ -50,13 +52,14 @@ export default function DashboardLayout({
   const locale = (cookieStore.get("lang")?.value === "ne" ? "ne" : "en") as Locale;
   const t = translations[locale];
 
-  const isSuperadmin = decodeRole(token) === "superadmin";
+  const isSuperadmin = token ? decodeRole(token) === "superadmin" : false;
   const items = allNavItems
     .filter(({ href }) => (isSuperadmin ? href === "/admin" : href !== "/admin"))
     .map(({ href, icon, labelKey }) => ({ href, icon, label: t.nav[labelKey] }));
 
   return (
     <div className="flex h-screen bg-surface-50">
+      <SuspensionOverlay />
       <aside className="w-64 bg-white border-r border-surface-200 flex flex-col">
         <div className="h-16 flex items-center px-5 border-b border-surface-100">
           <BrandLink isSuperadminDefault={isSuperadmin} />
@@ -73,6 +76,7 @@ export default function DashboardLayout({
         <header className="h-16 bg-white/80 backdrop-blur-sm border-b border-surface-200 flex items-center justify-between px-6 sticky top-0 z-40">
           <div />
           <div className="flex items-center gap-3">
+            <NotificationBell />
             <LocaleToggle />
             <ProfileMenu />
           </div>

@@ -60,7 +60,8 @@
   },
   "staff": {
     "search": "Search employees...",
-    "noResults": "No employees found"
+    "noResults": "No employees found",
+    "createStaff": "Create staff account"
   },
   "documents": {
     "upload": "Upload Document",
