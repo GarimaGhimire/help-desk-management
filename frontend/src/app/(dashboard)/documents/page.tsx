@@ -395,17 +395,11 @@ export default function DocumentsPage() {
   const [uploadAllowedRoles, setUploadAllowedRoles] = useState<string[]>([]);
   const [uploadAllowedUsers, setUploadAllowedUsers] = useState<string[]>([]);
 
-  // Selected role & user dropdown values for + button
-  const [roleToAdd, setRoleToAdd] = useState<string>("");
-  const [userToAdd, setUserToAdd] = useState<string>("");
-
   // Edit Access Modal
   const [editingDoc, setEditingDoc] = useState<DocumentItem | null>(null);
   const [editVisibility, setEditVisibility] = useState<VisibilityType>("all");
   const [editAllowedRoles, setEditAllowedRoles] = useState<string[]>([]);
   const [editAllowedUsers, setEditAllowedUsers] = useState<string[]>([]);
-  const [editRoleToAdd, setEditRoleToAdd] = useState<string>("");
-  const [editUserToAdd, setEditUserToAdd] = useState<string>("");
   const [updatingSettings, setUpdatingSettings] = useState(false);
 
   // Delete Confirmation Modal
@@ -498,25 +492,20 @@ export default function DocumentsPage() {
     }
   };
 
-  const addUploadRole = () => {
-    if (roleToAdd && !uploadAllowedRoles.includes(roleToAdd)) {
-      setUploadAllowedRoles([...uploadAllowedRoles, roleToAdd]);
-      setRoleToAdd("");
-    }
+  const toggleUploadRole = (roleKey: string) => {
+    setUploadAllowedRoles((prev) =>
+      prev.includes(roleKey) ? prev.filter((r) => r !== roleKey) : [...prev, roleKey]
+    );
   };
 
-  const removeUploadRole = (roleKey: string) =>
-    setUploadAllowedRoles(uploadAllowedRoles.filter((r) => r !== roleKey));
-
-  const addUploadUser = () => {
-    if (userToAdd && !uploadAllowedUsers.includes(userToAdd)) {
-      setUploadAllowedUsers([...uploadAllowedUsers, userToAdd]);
-      setUserToAdd("");
+  const addUploadUser = (userId: string) => {
+    if (userId && !uploadAllowedUsers.includes(userId)) {
+      setUploadAllowedUsers((prev) => [...prev, userId]);
     }
   };
 
   const removeUploadUser = (userId: string) =>
-    setUploadAllowedUsers(uploadAllowedUsers.filter((u) => u !== userId));
+    setUploadAllowedUsers((prev) => prev.filter((u) => u !== userId));
 
   const openEditModal = (doc: DocumentItem) => {
     setEditingDoc(doc);
@@ -525,25 +514,20 @@ export default function DocumentsPage() {
     setEditAllowedUsers((doc.allowed_users || []).map((u) => u.user_id));
   };
 
-  const addEditRole = () => {
-    if (editRoleToAdd && !editAllowedRoles.includes(editRoleToAdd)) {
-      setEditAllowedRoles([...editAllowedRoles, editRoleToAdd]);
-      setEditRoleToAdd("");
-    }
+  const toggleEditRole = (roleKey: string) => {
+    setEditAllowedRoles((prev) =>
+      prev.includes(roleKey) ? prev.filter((r) => r !== roleKey) : [...prev, roleKey]
+    );
   };
 
-  const removeEditRole = (roleKey: string) =>
-    setEditAllowedRoles(editAllowedRoles.filter((r) => r !== roleKey));
-
-  const addEditUser = () => {
-    if (editUserToAdd && !editAllowedUsers.includes(editUserToAdd)) {
-      setEditAllowedUsers([...editAllowedUsers, editUserToAdd]);
-      setEditUserToAdd("");
+  const addEditUser = (userId: string) => {
+    if (userId && !editAllowedUsers.includes(userId)) {
+      setEditAllowedUsers((prev) => [...prev, userId]);
     }
   };
 
   const removeEditUser = (userId: string) =>
-    setEditAllowedUsers(editAllowedUsers.filter((u) => u !== userId));
+    setEditAllowedUsers((prev) => prev.filter((u) => u !== userId));
 
   const handleSaveVisibility = async () => {
     if (!editingDoc) return;
@@ -662,142 +646,206 @@ export default function DocumentsPage() {
           </div>
 
           {/* Upload Visibility & Settings */}
-          <div className="lg:col-span-6 bg-white rounded-2xl border border-surface-200 p-6 shadow-sm space-y-4">
-            <h2 className="text-sm font-semibold text-surface-900 border-b border-surface-100 pb-3">
-              Visibility & Access Settings
-            </h2>
-
+          <div className="lg:col-span-6 bg-white rounded-2xl border border-surface-200 p-6 shadow-sm space-y-5">
             <div>
-              <label className="block text-xs font-medium text-surface-600 mb-1.5">
-                Access Permission Level
-              </label>
-              <select
-                value={uploadVisibility}
-                onChange={(e) => setUploadVisibility(e.target.value as VisibilityType)}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-surface-200 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary-500 transition"
-              >
-                <option value="all">🌐 All Members (Everyone in organization)</option>
-                <option value="admins">🛡️ Only Admins (Admins &amp; Superadmins)</option>
-                <option value="restricted">🔒 Restricted (Only Uploader - hidden from admins)</option>
-                <option value="custom">⚙️ Custom Access (Select Roles &amp; Members)</option>
-              </select>
+              <h2 className="text-sm font-bold text-surface-900">
+                Who can access this document?
+              </h2>
+              <p className="text-xs text-surface-500 mt-0.5">
+                Choose who can view this file once uploaded
+              </p>
             </div>
 
-            {uploadVisibility === "custom" && (
-              <div className="space-y-4 pt-2 border-t border-surface-100">
-                {/* Allowed Roles Picker */}
+            {/* Visual 3-card selector */}
+            <div className="grid grid-cols-3 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setUploadVisibility("all")}
+                className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                  uploadVisibility === "all"
+                    ? "border-primary-600 bg-primary-50/60 ring-2 ring-primary-500/20 shadow-xs"
+                    : "border-surface-200 bg-surface-50/40 hover:bg-white hover:border-surface-300"
+                }`}
+              >
+                <div className="text-xl mb-1.5">🌐</div>
                 <div>
-                  <label className="block text-xs font-medium text-surface-600 mb-1.5">
-                    Allowed Roles / Positions
-                  </label>
-                  <div className="flex gap-2 mb-2">
-                    <select
-                      value={roleToAdd}
-                      onChange={(e) => setRoleToAdd(e.target.value)}
-                      className="flex-1 px-3 py-2 rounded-lg border border-surface-200 text-xs focus:ring-2 focus:ring-primary-500"
-                    >
-                      <option value="">Select a role to add...</option>
-                      {allRoleOptions.map((r) => (
-                        <option key={r.key} value={r.key}>
-                          {r.label} ({r.type})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={addUploadRole}
-                      className="px-3 py-2 bg-surface-900 text-white rounded-lg text-xs font-semibold hover:bg-surface-800 transition"
-                    >
-                      + Add Role
-                    </button>
+                  <div className={`text-xs font-bold ${uploadVisibility === "all" ? "text-primary-900" : "text-surface-900"}`}>
+                    Everyone
                   </div>
-                  <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-surface-50 rounded-lg border border-surface-200">
-                    {uploadAllowedRoles.length === 0 && (
-                      <span className="text-xs text-surface-400 italic">No role tags added yet</span>
-                    )}
-                    {uploadAllowedRoles.map((roleKey) => (
-                      <span
-                        key={roleKey}
-                        className="group inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-surface-300 text-surface-700 rounded-md text-xs font-medium shadow-2xs hover:border-red-300 transition"
-                      >
-                        🏷️ {getRoleBadgeLabel(roleKey)}
-                        <button
-                          type="button"
-                          onClick={() => removeUploadRole(roleKey)}
-                          className="text-surface-400 group-hover:text-red-600 font-bold ml-1"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
+                  <div className="text-[10px] text-surface-500 mt-0.5 leading-snug">
+                    All org members
                   </div>
                 </div>
+              </button>
 
-                {/* Allowed Custom Members Picker */}
+              <button
+                type="button"
+                onClick={() => setUploadVisibility("admins")}
+                className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                  uploadVisibility === "admins"
+                    ? "border-primary-600 bg-primary-50/60 ring-2 ring-primary-500/20 shadow-xs"
+                    : "border-surface-200 bg-surface-50/40 hover:bg-white hover:border-surface-300"
+                }`}
+              >
+                <div className="text-xl mb-1.5">🛡️</div>
                 <div>
-                  <label className="block text-xs font-medium text-surface-600 mb-1.5">
-                    Specific Custom Members
-                  </label>
-                  <div className="flex gap-2 mb-2">
-                    <select
-                      value={userToAdd}
-                      onChange={(e) => setUserToAdd(e.target.value)}
-                      className="flex-1 px-3 py-2 rounded-lg border border-surface-200 text-xs focus:ring-2 focus:ring-primary-500"
-                    >
-                      <option value="">Select a member to add...</option>
-                      {orgMembers.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.display_name || m.name} ({m.email})
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={addUploadUser}
-                      className="px-3 py-2 bg-surface-900 text-white rounded-lg text-xs font-semibold hover:bg-surface-800 transition"
-                    >
-                      + Add Member
-                    </button>
+                  <div className={`text-xs font-bold ${uploadVisibility === "admins" ? "text-primary-900" : "text-surface-900"}`}>
+                    Admins
                   </div>
-                  <div className="flex flex-wrap gap-1.5 min-h-[32px] p-2 bg-surface-50 rounded-lg border border-surface-200">
-                    {uploadAllowedUsers.length === 0 && (
-                      <span className="text-xs text-surface-400 italic">No custom members added yet</span>
+                  <div className="text-[10px] text-surface-500 mt-0.5 leading-snug">
+                    Staff & org admins
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setUploadVisibility("custom")}
+                className={`p-3.5 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                  uploadVisibility === "custom"
+                    ? "border-primary-600 bg-primary-50/60 ring-2 ring-primary-500/20 shadow-xs"
+                    : "border-surface-200 bg-surface-50/40 hover:bg-white hover:border-surface-300"
+                }`}
+              >
+                <div className="text-xl mb-1.5">👥</div>
+                <div>
+                  <div className={`text-xs font-bold ${uploadVisibility === "custom" ? "text-primary-900" : "text-surface-900"}`}>
+                    Custom
+                  </div>
+                  <div className="text-[10px] text-surface-500 mt-0.5 leading-snug">
+                    Roles / people
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            {/* Custom Access Options - Shown only when Custom is chosen */}
+            {uploadVisibility === "custom" && (
+              <div className="space-y-4 pt-3 border-t border-surface-100 bg-surface-50/50 p-4 rounded-xl border border-surface-200/80">
+                {/* 1. Clickable Role Pills */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-surface-800">
+                      1. Allowed Roles & Positions
+                    </span>
+                    {uploadAllowedRoles.length > 0 && (
+                      <span className="text-[11px] font-medium text-primary-700 bg-primary-50 px-2 py-0.5 rounded-full border border-primary-200">
+                        {uploadAllowedRoles.length} selected
+                      </span>
                     )}
-                    {uploadAllowedUsers.map((uid) => {
-                      const member = orgMembers.find((m) => m.id === uid);
+                  </div>
+                  <p className="text-[11px] text-surface-500 mb-2">
+                    Click any role to toggle access:
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {allRoleOptions.map((r) => {
+                      const isSelected = uploadAllowedRoles.includes(r.key);
                       return (
-                        <span
-                          key={uid}
-                          className="group inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-surface-300 text-surface-700 rounded-md text-xs font-medium shadow-2xs hover:border-red-300 transition"
+                        <button
+                          key={r.key}
+                          type="button"
+                          onClick={() => toggleUploadRole(r.key)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all flex items-center gap-1.5 cursor-pointer ${
+                            isSelected
+                              ? "bg-primary-600 text-white border-primary-600 shadow-2xs scale-[1.02]"
+                              : "bg-white text-surface-700 border-surface-200 hover:border-surface-400 hover:bg-surface-50"
+                          }`}
                         >
-                          👤 {member ? member.display_name || member.name : uid}
-                          <button
-                            type="button"
-                            onClick={() => removeUploadUser(uid)}
-                            className="text-surface-400 group-hover:text-red-600 font-bold ml-1"
-                          >
-                            ×
-                          </button>
-                        </span>
+                          <span className={isSelected ? "font-bold" : "text-surface-400"}>
+                            {isSelected ? "✓" : "+"}
+                          </span>
+                          <span>{r.label}</span>
+                        </button>
                       );
                     })}
                   </div>
                 </div>
+
+                {/* 2. Specific Member Selector */}
+                <div className="pt-2 border-t border-surface-200/60">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-surface-800">
+                      2. Specific Members (Optional)
+                    </span>
+                    {uploadAllowedUsers.length > 0 && (
+                      <span className="text-[11px] font-medium text-primary-700 bg-primary-50 px-2 py-0.5 rounded-full border border-primary-200">
+                        {uploadAllowedUsers.length} selected
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) addUploadUser(e.target.value);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-surface-200 text-xs font-medium text-surface-700 focus:ring-2 focus:ring-primary-500 bg-white"
+                  >
+                    <option value="">+ Add a specific member...</option>
+                    {orgMembers
+                      .filter((m) => !uploadAllowedUsers.includes(m.id))
+                      .map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.display_name || m.name} ({m.email})
+                        </option>
+                      ))}
+                  </select>
+
+                  {uploadAllowedUsers.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {uploadAllowedUsers.map((uid) => {
+                        const member = orgMembers.find((m) => m.id === uid);
+                        return (
+                          <span
+                            key={uid}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-surface-200 text-surface-800 rounded-lg text-xs font-medium shadow-2xs"
+                          >
+                            <span>👤 {member ? member.display_name || member.name : uid}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeUploadUser(uid)}
+                              className="text-surface-400 hover:text-red-600 font-bold ml-1 transition"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            <button
-              type="button"
-              disabled={!selectedFile || uploading}
-              onClick={handleUploadSubmit}
-              className={`w-full py-3 rounded-xl font-semibold text-sm transition shadow-sm ${
-                !selectedFile || uploading
-                  ? "bg-surface-100 text-surface-400 cursor-not-allowed"
-                  : "bg-primary-600 hover:bg-primary-700 text-white"
-              }`}
-            >
-              {uploading ? "Uploading..." : "Upload Document"}
-            </button>
+            {/* Upload Button */}
+            <div className="pt-2">
+              <button
+                type="button"
+                disabled={!selectedFile || uploading}
+                onClick={handleUploadSubmit}
+                className={`w-full py-3.5 rounded-xl font-semibold text-sm transition-all shadow-sm flex items-center justify-center gap-2 ${
+                  !selectedFile || uploading
+                    ? "bg-surface-100 text-surface-400 cursor-not-allowed border border-surface-200"
+                    : "bg-primary-600 hover:bg-primary-700 text-white cursor-pointer active:scale-[0.99]"
+                }`}
+              >
+                {uploading ? (
+                  <>
+                    <span className="animate-spin">⏳</span>
+                    <span>Uploading document...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>📤</span>
+                    <span>Upload Document</span>
+                  </>
+                )}
+              </button>
+              {!selectedFile && (
+                <p className="text-[11px] text-center text-surface-400 mt-2">
+                  Please drop or select a file on the left first
+                </p>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -984,91 +1032,178 @@ export default function DocumentsPage() {
       {/* ── Edit Visibility Modal ── */}
       {editingDoc && (
         <div className="fixed inset-0 bg-surface-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-4">
-            <h3 className="text-base font-bold text-surface-900">
-              Edit Access Settings for &quot;{editingDoc.filename}&quot;
-            </h3>
-
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl space-y-5">
             <div>
-              <label className="block text-xs font-medium text-surface-600 mb-1">Access Level</label>
-              <select
-                value={editVisibility}
-                onChange={(e) => setEditVisibility(e.target.value as VisibilityType)}
-                className="w-full px-3.5 py-2 rounded-xl border border-surface-200 text-sm font-medium focus:ring-2 focus:ring-primary-500"
-              >
-                <option value="all">🌐 All Members</option>
-                <option value="admins">🛡️ Only Admins</option>
-                <option value="restricted">🔒 Restricted (Only Uploader)</option>
-                <option value="custom">⚙️ Custom Access</option>
-              </select>
+              <h3 className="text-base font-bold text-surface-900">
+                Edit Access for &quot;{editingDoc.filename}&quot;
+              </h3>
+              <p className="text-xs text-surface-500 mt-0.5">
+                Manage who can view this document in your organization
+              </p>
             </div>
 
-            {editVisibility === "custom" && (
-              <div className="space-y-3 pt-2 border-t border-surface-100">
+            {/* 3 Visual Cards */}
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                onClick={() => setEditVisibility("all")}
+                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                  editVisibility === "all"
+                    ? "border-primary-600 bg-primary-50/60 ring-2 ring-primary-500/20 shadow-xs"
+                    : "border-surface-200 bg-surface-50/40 hover:bg-white hover:border-surface-300"
+                }`}
+              >
+                <div className="text-lg mb-1">🌐</div>
                 <div>
-                  <label className="block text-xs font-medium text-surface-600 mb-1">Allowed Roles</label>
-                  <div className="flex gap-2 mb-2">
-                    <select
-                      value={editRoleToAdd}
-                      onChange={(e) => setEditRoleToAdd(e.target.value)}
-                      className="flex-1 px-3 py-1.5 rounded-lg border border-surface-200 text-xs"
-                    >
-                      <option value="">Select role...</option>
-                      {allRoleOptions.map((r) => (
-                        <option key={r.key} value={r.key}>{r.label}</option>
-                      ))}
-                    </select>
-                    <button type="button" onClick={addEditRole} className="px-3 py-1.5 bg-surface-900 text-white rounded-lg text-xs font-medium">
-                      + Add
-                    </button>
+                  <div className={`text-xs font-bold ${editVisibility === "all" ? "text-primary-900" : "text-surface-900"}`}>
+                    Everyone
                   </div>
-                  <div className="flex flex-wrap gap-1.5 p-2 bg-surface-50 rounded-lg border border-surface-200 min-h-[32px]">
-                    {editAllowedRoles.map((rk) => (
-                      <span key={rk} className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-surface-300 text-xs rounded">
-                        🏷️ {getRoleBadgeLabel(rk)}
-                        <button type="button" onClick={() => removeEditRole(rk)} className="font-bold text-red-500 ml-1">×</button>
-                      </span>
-                    ))}
+                  <div className="text-[10px] text-surface-500 mt-0.5 leading-tight">
+                    All org members
                   </div>
                 </div>
+              </button>
 
+              <button
+                type="button"
+                onClick={() => setEditVisibility("admins")}
+                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                  editVisibility === "admins"
+                    ? "border-primary-600 bg-primary-50/60 ring-2 ring-primary-500/20 shadow-xs"
+                    : "border-surface-200 bg-surface-50/40 hover:bg-white hover:border-surface-300"
+                }`}
+              >
+                <div className="text-lg mb-1">🛡️</div>
                 <div>
-                  <label className="block text-xs font-medium text-surface-600 mb-1">Allowed Members</label>
-                  <div className="flex gap-2 mb-2">
-                    <select
-                      value={editUserToAdd}
-                      onChange={(e) => setEditUserToAdd(e.target.value)}
-                      className="flex-1 px-3 py-1.5 rounded-lg border border-surface-200 text-xs"
-                    >
-                      <option value="">Select member...</option>
-                      {orgMembers.map((m) => (
-                        <option key={m.id} value={m.id}>{m.display_name || m.name}</option>
-                      ))}
-                    </select>
-                    <button type="button" onClick={addEditUser} className="px-3 py-1.5 bg-surface-900 text-white rounded-lg text-xs font-medium">
-                      + Add
-                    </button>
+                  <div className={`text-xs font-bold ${editVisibility === "admins" ? "text-primary-900" : "text-surface-900"}`}>
+                    Admins
                   </div>
-                  <div className="flex flex-wrap gap-1.5 p-2 bg-surface-50 rounded-lg border border-surface-200 min-h-[32px]">
-                    {editAllowedUsers.map((uid) => {
-                      const member = orgMembers.find((m) => m.id === uid);
+                  <div className="text-[10px] text-surface-500 mt-0.5 leading-tight">
+                    Staff & org admins
+                  </div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setEditVisibility("custom")}
+                className={`p-3 rounded-xl border text-left transition-all flex flex-col justify-between ${
+                  editVisibility === "custom"
+                    ? "border-primary-600 bg-primary-50/60 ring-2 ring-primary-500/20 shadow-xs"
+                    : "border-surface-200 bg-surface-50/40 hover:bg-white hover:border-surface-300"
+                }`}
+              >
+                <div className="text-lg mb-1">👥</div>
+                <div>
+                  <div className={`text-xs font-bold ${editVisibility === "custom" ? "text-primary-900" : "text-surface-900"}`}>
+                    Custom
+                  </div>
+                  <div className="text-[10px] text-surface-500 mt-0.5 leading-tight">
+                    Roles / people
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            {/* Custom Access Options in Modal */}
+            {editVisibility === "custom" && (
+              <div className="space-y-4 pt-3 border-t border-surface-100 bg-surface-50/50 p-4 rounded-xl border border-surface-200/80">
+                {/* 1. Clickable Role Pills */}
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-surface-800">
+                      1. Allowed Roles & Positions
+                    </span>
+                    {editAllowedRoles.length > 0 && (
+                      <span className="text-[11px] font-medium text-primary-700 bg-primary-50 px-2 py-0.5 rounded-full border border-primary-200">
+                        {editAllowedRoles.length} selected
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {allRoleOptions.map((r) => {
+                      const isSelected = editAllowedRoles.includes(r.key);
                       return (
-                        <span key={uid} className="inline-flex items-center gap-1 px-2 py-0.5 bg-white border border-surface-300 text-xs rounded">
-                          👤 {member ? member.display_name || member.name : uid}
-                          <button type="button" onClick={() => removeEditUser(uid)} className="font-bold text-red-500 ml-1">×</button>
-                        </span>
+                        <button
+                          key={r.key}
+                          type="button"
+                          onClick={() => toggleEditRole(r.key)}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all flex items-center gap-1.5 cursor-pointer ${
+                            isSelected
+                              ? "bg-primary-600 text-white border-primary-600 shadow-2xs"
+                              : "bg-white text-surface-700 border-surface-200 hover:border-surface-400 hover:bg-surface-50"
+                          }`}
+                        >
+                          <span className={isSelected ? "font-bold" : "text-surface-400"}>
+                            {isSelected ? "✓" : "+"}
+                          </span>
+                          <span>{r.label}</span>
+                        </button>
                       );
                     })}
                   </div>
                 </div>
+
+                {/* 2. Specific Member Selector */}
+                <div className="pt-2 border-t border-surface-200/60">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-xs font-bold text-surface-800">
+                      2. Specific Members (Optional)
+                    </span>
+                    {editAllowedUsers.length > 0 && (
+                      <span className="text-[11px] font-medium text-primary-700 bg-primary-50 px-2 py-0.5 rounded-full border border-primary-200">
+                        {editAllowedUsers.length} selected
+                      </span>
+                    )}
+                  </div>
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) addEditUser(e.target.value);
+                    }}
+                    className="w-full px-3 py-2 rounded-xl border border-surface-200 text-xs font-medium text-surface-700 focus:ring-2 focus:ring-primary-500 bg-white"
+                  >
+                    <option value="">+ Add a specific member...</option>
+                    {orgMembers
+                      .filter((m) => !editAllowedUsers.includes(m.id))
+                      .map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.display_name || m.name} ({m.email})
+                        </option>
+                      ))}
+                  </select>
+
+                  {editAllowedUsers.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {editAllowedUsers.map((uid) => {
+                        const member = orgMembers.find((m) => m.id === uid);
+                        return (
+                          <span
+                            key={uid}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-white border border-surface-200 text-surface-800 rounded-lg text-xs font-medium shadow-2xs"
+                          >
+                            <span>👤 {member ? member.display_name || member.name : uid}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeEditUser(uid)}
+                              className="text-surface-400 hover:text-red-600 font-bold ml-1 transition"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            <div className="flex justify-end gap-3 pt-4 border-t border-surface-100">
+            <div className="flex justify-end gap-3 pt-3 border-t border-surface-100">
               <button
                 type="button"
                 onClick={() => setEditingDoc(null)}
-                className="px-4 py-2 bg-surface-100 text-surface-700 rounded-xl text-xs font-semibold"
+                className="px-4 py-2 bg-surface-100 hover:bg-surface-200 text-surface-700 rounded-xl text-xs font-semibold transition cursor-pointer"
               >
                 Cancel
               </button>
@@ -1076,7 +1211,7 @@ export default function DocumentsPage() {
                 type="button"
                 disabled={updatingSettings}
                 onClick={handleSaveVisibility}
-                className="px-4 py-2 bg-primary-600 text-white rounded-xl text-xs font-semibold hover:bg-primary-700 transition"
+                className="px-5 py-2 bg-primary-600 text-white rounded-xl text-xs font-semibold hover:bg-primary-700 transition shadow-xs cursor-pointer"
               >
                 {updatingSettings ? "Saving..." : "Save Settings"}
               </button>
