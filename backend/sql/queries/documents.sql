@@ -1,15 +1,15 @@
 -- name: CreateDocument :one
-INSERT INTO documents (uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at;
+INSERT INTO documents (uploaded_by, group_id, filename, mime_type, file_data, visibility, password_hash, allowed_roles)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, uploaded_by, group_id, filename, mime_type, visibility, password_hash, allowed_roles, created_at;
 
 -- name: GetDocument :one
-SELECT id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at
+SELECT id, uploaded_by, group_id, filename, mime_type, file_data, visibility, password_hash, allowed_roles, created_at
 FROM documents
 WHERE id = $1 LIMIT 1;
 
 -- name: ListAllDocuments :many
-SELECT d.id, d.uploaded_by, d.group_id, d.filename, d.storage_path,
+SELECT d.id, d.uploaded_by, d.group_id, d.filename, d.mime_type,
        d.visibility, d.password_hash, d.allowed_roles, d.created_at,
        COALESCE(u.display_name, u.name) AS uploader_name
 FROM documents d
@@ -19,7 +19,7 @@ ORDER BY d.created_at DESC;
 -- name: UpdateDocumentVisibility :one
 UPDATE documents SET visibility = $2, allowed_roles = $3
 WHERE id = $1
-RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at;
+RETURNING id, uploaded_by, group_id, filename, mime_type, visibility, password_hash, allowed_roles, created_at;
 
 -- name: SetDocumentPassword :exec
 UPDATE documents SET password_hash = $2 WHERE id = $1;

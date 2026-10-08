@@ -111,7 +111,8 @@ CREATE TABLE documents (
     uploaded_by UUID NOT NULL REFERENCES users(id),
     group_id UUID REFERENCES groups(id) ON DELETE SET NULL,
     filename VARCHAR(500) NOT NULL,
-    storage_path VARCHAR(1000) NOT NULL,
+    mime_type VARCHAR(255) NOT NULL DEFAULT 'application/octet-stream',
+    file_data BYTEA NOT NULL,
     visibility doc_visibility NOT NULL DEFAULT 'all',
     password_hash VARCHAR(255),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

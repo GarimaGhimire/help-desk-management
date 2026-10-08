@@ -21,16 +21,17 @@ func (q *Queries) ClearDocumentAccessList(ctx context.Context, documentID pgtype
 }
 
 const createDocument = `-- name: CreateDocument :one
-INSERT INTO documents (uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at
+INSERT INTO documents (uploaded_by, group_id, filename, mime_type, file_data, visibility, password_hash, allowed_roles)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, uploaded_by, group_id, filename, mime_type, visibility, password_hash, allowed_roles, created_at
 `
 
 type CreateDocumentParams struct {
 	UploadedBy   pgtype.UUID `json:"uploaded_by"`
 	GroupID      pgtype.UUID `json:"group_id"`
 	Filename     string      `json:"filename"`
-	StoragePath  string      `json:"storage_path"`
+	MimeType     string      `json:"mime_type"`
+	FileData     []byte      `json:"file_data"`
 	Visibility   string      `json:"visibility"`
 	PasswordHash pgtype.Text `json:"password_hash"`
 	AllowedRoles []string    `json:"allowed_roles"`
@@ -41,7 +42,7 @@ type CreateDocumentRow struct {
 	UploadedBy   pgtype.UUID        `json:"uploaded_by"`
 	GroupID      pgtype.UUID        `json:"group_id"`
 	Filename     string             `json:"filename"`
-	StoragePath  string             `json:"storage_path"`
+	MimeType     string             `json:"mime_type"`
 	Visibility   string             `json:"visibility"`
 	PasswordHash pgtype.Text        `json:"password_hash"`
 	AllowedRoles []string           `json:"allowed_roles"`
@@ -53,7 +54,8 @@ func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) 
 		arg.UploadedBy,
 		arg.GroupID,
 		arg.Filename,
-		arg.StoragePath,
+		arg.MimeType,
+		arg.FileData,
 		arg.Visibility,
 		arg.PasswordHash,
 		arg.AllowedRoles,
@@ -64,7 +66,7 @@ func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) 
 		&i.UploadedBy,
 		&i.GroupID,
 		&i.Filename,
-		&i.StoragePath,
+		&i.MimeType,
 		&i.Visibility,
 		&i.PasswordHash,
 		&i.AllowedRoles,
@@ -83,7 +85,7 @@ func (q *Queries) DeleteDocument(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getDocument = `-- name: GetDocument :one
-SELECT id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at
+SELECT id, uploaded_by, group_id, filename, mime_type, file_data, visibility, password_hash, allowed_roles, created_at
 FROM documents
 WHERE id = $1 LIMIT 1
 `
@@ -93,7 +95,8 @@ type GetDocumentRow struct {
 	UploadedBy   pgtype.UUID        `json:"uploaded_by"`
 	GroupID      pgtype.UUID        `json:"group_id"`
 	Filename     string             `json:"filename"`
-	StoragePath  string             `json:"storage_path"`
+	MimeType     string             `json:"mime_type"`
+	FileData     []byte             `json:"file_data"`
 	Visibility   string             `json:"visibility"`
 	PasswordHash pgtype.Text        `json:"password_hash"`
 	AllowedRoles []string           `json:"allowed_roles"`
@@ -108,7 +111,8 @@ func (q *Queries) GetDocument(ctx context.Context, id pgtype.UUID) (GetDocumentR
 		&i.UploadedBy,
 		&i.GroupID,
 		&i.Filename,
-		&i.StoragePath,
+		&i.MimeType,
+		&i.FileData,
 		&i.Visibility,
 		&i.PasswordHash,
 		&i.AllowedRoles,
@@ -167,7 +171,7 @@ func (q *Queries) GrantDocumentAccess(ctx context.Context, arg GrantDocumentAcce
 }
 
 const listAllDocuments = `-- name: ListAllDocuments :many
-SELECT d.id, d.uploaded_by, d.group_id, d.filename, d.storage_path,
+SELECT d.id, d.uploaded_by, d.group_id, d.filename, d.mime_type,
        d.visibility, d.password_hash, d.allowed_roles, d.created_at,
        COALESCE(u.display_name, u.name) AS uploader_name
 FROM documents d
@@ -180,7 +184,7 @@ type ListAllDocumentsRow struct {
 	UploadedBy   pgtype.UUID        `json:"uploaded_by"`
 	GroupID      pgtype.UUID        `json:"group_id"`
 	Filename     string             `json:"filename"`
-	StoragePath  string             `json:"storage_path"`
+	MimeType     string             `json:"mime_type"`
 	Visibility   string             `json:"visibility"`
 	PasswordHash pgtype.Text        `json:"password_hash"`
 	AllowedRoles []string           `json:"allowed_roles"`
@@ -202,7 +206,7 @@ func (q *Queries) ListAllDocuments(ctx context.Context) ([]ListAllDocumentsRow, 
 			&i.UploadedBy,
 			&i.GroupID,
 			&i.Filename,
-			&i.StoragePath,
+			&i.MimeType,
 			&i.Visibility,
 			&i.PasswordHash,
 			&i.AllowedRoles,
@@ -250,7 +254,7 @@ func (q *Queries) SetDocumentPassword(ctx context.Context, arg SetDocumentPasswo
 const updateDocumentVisibility = `-- name: UpdateDocumentVisibility :one
 UPDATE documents SET visibility = $2, allowed_roles = $3
 WHERE id = $1
-RETURNING id, uploaded_by, group_id, filename, storage_path, visibility, password_hash, allowed_roles, created_at
+RETURNING id, uploaded_by, group_id, filename, mime_type, visibility, password_hash, allowed_roles, created_at
 `
 
 type UpdateDocumentVisibilityParams struct {
@@ -264,7 +268,7 @@ type UpdateDocumentVisibilityRow struct {
 	UploadedBy   pgtype.UUID        `json:"uploaded_by"`
 	GroupID      pgtype.UUID        `json:"group_id"`
 	Filename     string             `json:"filename"`
-	StoragePath  string             `json:"storage_path"`
+	MimeType     string             `json:"mime_type"`
 	Visibility   string             `json:"visibility"`
 	PasswordHash pgtype.Text        `json:"password_hash"`
 	AllowedRoles []string           `json:"allowed_roles"`
@@ -279,7 +283,7 @@ func (q *Queries) UpdateDocumentVisibility(ctx context.Context, arg UpdateDocume
 		&i.UploadedBy,
 		&i.GroupID,
 		&i.Filename,
-		&i.StoragePath,
+		&i.MimeType,
 		&i.Visibility,
 		&i.PasswordHash,
 		&i.AllowedRoles,

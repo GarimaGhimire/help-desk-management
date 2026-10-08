@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"bytes"
 	"context"
 	cryptoRand "crypto/rand"
 	"encoding/json"
@@ -78,14 +79,23 @@ func (c *Client) readPump() {
 			Content   string `json:"content"`
 			ReplyToID string `json:"replyToId"`
 		}
-		if err := json.Unmarshal(data, &incoming); err != nil || strings.TrimSpace(incoming.Content) == "" {
+		if err := json.Unmarshal(data, &incoming); err != nil {
 			c.sendJSON(map[string]string{"error": "invalid message format"})
+			continue
+		}
+		content := strings.TrimSpace(incoming.Content)
+		if content == "" {
+			c.sendJSON(map[string]string{"error": "message cannot be empty"})
+			continue
+		}
+		if len(content) > 4096 {
+			c.sendJSON(map[string]string{"error": "message content cannot exceed 4096 characters"})
 			continue
 		}
 
 		// Server-enforced anti-spam: style the blocked client like Discord so
 		// the cooldown is visible to the offending account only.
-		if ok, retryAfter := messageLimiter.Allow(c.userID, incoming.Content, time.Now()); !ok {
+		if ok, retryAfter := messageLimiter.Allow(c.userID, content, time.Now()); !ok {
 			c.sendJSON(map[string]interface{}{
 				"error":       "slow_down",
 				"retry_after": retryAfter,
@@ -97,7 +107,7 @@ func (c *Client) readPump() {
 			GroupID:    uuidFromString(c.groupID),
 			SenderID:   uuidFromString(c.userID),
 			ReceiverID: pgtype.UUID{},
-			Content:    strings.TrimSpace(incoming.Content),
+			Content:    content,
 		}
 		if strings.TrimSpace(incoming.ReplyToID) != "" {
 			params.ReplyToID = uuidFromString(incoming.ReplyToID)
@@ -359,12 +369,43 @@ var (
 
 const maxAttachmentBytes = 15 << 20 // 15 MiB limit per file
 
-func AttachmentHandler() http.Handler {
-	uploadDir := os.Getenv("UPLOAD_DIR")
-	if uploadDir == "" {
-		uploadDir = "./data/uploads"
+func AttachmentHandler(repos *db.Repos) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filename := chi.URLParam(r, "filename")
+		if filename == "" {
+			filename = filepath.Base(r.URL.Path)
+		}
+		filename = filepath.Base(filename)
+		if filename == "" || filename == "." || filename == "/" {
+			http.NotFound(w, r)
+			return
+		}
+
+		var originalName, contentType string
+		var data []byte
+		err := repos.Pool.QueryRow(r.Context(),
+			`SELECT original_name, content_type, file_data FROM attachments WHERE filename = $1 LIMIT 1`,
+			filename,
+		).Scan(&originalName, &contentType, &data)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		if !strings.HasPrefix(contentType, "image/") && contentType != "application/pdf" {
+			w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(originalName)))
+		}
+
+		http.ServeContent(w, r, originalName, time.Time{}, bytes.NewReader(data))
 	}
-	return http.StripPrefix("/attachments/", http.FileServer(http.Dir(filepath.Join(uploadDir, "attachments"))))
 }
 
 func Handlers(repos *db.Repos) chi.Router {
@@ -396,8 +437,17 @@ func editMessage(repos *db.Repos) http.HandlerFunc {
 		var req struct {
 			Content string `json:"content"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Content) == "" {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			middleware.RespondError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		content := strings.TrimSpace(req.Content)
+		if content == "" {
 			middleware.RespondError(w, http.StatusBadRequest, "content is required")
+			return
+		}
+		if len(content) > 4096 {
+			middleware.RespondError(w, http.StatusBadRequest, "message content cannot exceed 4096 characters")
 			return
 		}
 
@@ -414,7 +464,7 @@ func editMessage(repos *db.Repos) http.HandlerFunc {
 
 		updated, err := repos.Queries.UpdateMessage(r.Context(), sqldb.UpdateMessageParams{
 			ID:      uuidFromString(msgID),
-			Content: strings.TrimSpace(req.Content),
+			Content: content,
 		})
 		if err != nil {
 			middleware.RespondError(w, http.StatusInternalServerError, "failed to update message")
@@ -517,6 +567,11 @@ func forwardMessage(repos *db.Repos) http.HandlerFunc {
 		original, err := repos.Queries.GetMessageByID(r.Context(), uuidFromString(req.MessageID))
 		if err != nil {
 			middleware.RespondError(w, http.StatusNotFound, "original message not found")
+			return
+		}
+
+		if len(original.Content) > 4096 {
+			middleware.RespondError(w, http.StatusBadRequest, "message content cannot exceed 4096 characters")
 			return
 		}
 
@@ -685,12 +740,6 @@ func searchMessages(repos *db.Repos) http.HandlerFunc {
 }
 
 func uploadAttachment(repos *db.Repos) http.HandlerFunc {
-	uploadDir := os.Getenv("UPLOAD_DIR")
-	if uploadDir == "" {
-		uploadDir = "./data/uploads"
-	}
-	attachmentDir := filepath.Join(uploadDir, "attachments")
-
 	return func(w http.ResponseWriter, r *http.Request) {
 		me := middleware.GetUser(r)
 		if me == nil {
@@ -725,11 +774,7 @@ func uploadAttachment(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
-		if err := os.MkdirAll(attachmentDir, 0o755); err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to prepare storage")
-			return
-		}
-
+		detectedType := http.DetectContentType(data)
 		ext := filepath.Ext(header.Filename)
 		cleanExt := strings.ToLower(strings.TrimSpace(ext))
 		if cleanExt == "" {
@@ -738,15 +783,18 @@ func uploadAttachment(repos *db.Repos) http.HandlerFunc {
 
 		randomStr, _ := randomSuffix(6)
 		filename := fmt.Sprintf("%d-%s%s", time.Now().UnixNano(), randomStr, cleanExt)
-		dst := filepath.Join(attachmentDir, filename)
 
-		if err := os.WriteFile(dst, data, 0o600); err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to save attachment")
+		_, err = repos.Pool.Exec(r.Context(), `
+			INSERT INTO attachments (filename, original_name, content_type, size_bytes, file_data, uploaded_by)
+			VALUES ($1, $2, $3, $4, $5, $6)
+		`, filename, header.Filename, detectedType, header.Size, data, db.ParseUUID(me.ID))
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to save attachment in database")
 			return
 		}
 
 		fileURL := "/attachments/" + filename
-		isImage := strings.HasPrefix(http.DetectContentType(data), "image/")
+		isImage := strings.HasPrefix(detectedType, "image/")
 
 		middleware.RespondJSON(w, http.StatusCreated, map[string]interface{}{
 			"url":      fileURL,

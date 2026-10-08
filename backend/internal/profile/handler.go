@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,14 +52,39 @@ func (s *Service) AvatarDir() string {
 	return filepath.Join(s.uploadDir, "avatars")
 }
 
-// AvatarHandler serves stored avatar images under /avatars/. Filenames are
-// server-generated (userID-random.ext), so a plain file server is safe here.
-func AvatarHandler() http.Handler {
-	s := &Service{uploadDir: os.Getenv("UPLOAD_DIR"), publicPath: "/avatars"}
-	if s.uploadDir == "" {
-		s.uploadDir = "./data/uploads"
+// AvatarHandler serves stored avatar images under /avatars/ directly from the database.
+func AvatarHandler(repos *db.Repos) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filename := chi.URLParam(r, "filename")
+		if filename == "" {
+			filename = filepath.Base(r.URL.Path)
+		}
+		filename = filepath.Base(filename)
+		if filename == "" || filename == "." || filename == "/" {
+			http.NotFound(w, r)
+			return
+		}
+
+		var contentType string
+		var data []byte
+		err := repos.Pool.QueryRow(r.Context(),
+			`SELECT content_type, file_data FROM avatars WHERE filename = $1 LIMIT 1`,
+			filename,
+		).Scan(&contentType, &data)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeContent(w, r, filename, time.Time{}, bytes.NewReader(data))
 	}
-	return http.StripPrefix("/avatars/", http.FileServer(http.Dir(s.AvatarDir())))
 }
 
 func (s *Service) get(w http.ResponseWriter, r *http.Request) {
@@ -150,10 +177,9 @@ func (s *Service) deleteAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if me.AvatarURL != "" {
-		// Only ever remove files living inside the avatar directory.
 		name := filepath.Base(me.AvatarURL)
 		if name != "." && name != "/" && !strings.Contains(name, "/") {
-			_ = os.Remove(filepath.Join(s.AvatarDir(), name))
+			_, _ = s.repos.Pool.Exec(r.Context(), `DELETE FROM avatars WHERE filename = $1`, name)
 		}
 	}
 
@@ -231,14 +257,10 @@ func (s *Service) uploadAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext, ok := imageExt(http.DetectContentType(data))
+	detectedType := http.DetectContentType(data)
+	ext, ok := imageExt(detectedType)
 	if !ok {
 		middleware.RespondError(w, http.StatusBadRequest, "only png, jpeg, webp or gif images are allowed")
-		return
-	}
-
-	if err := os.MkdirAll(s.AvatarDir(), 0o755); err != nil {
-		middleware.RespondError(w, http.StatusInternalServerError, "failed to prepare uploads")
 		return
 	}
 
@@ -249,10 +271,24 @@ func (s *Service) uploadAvatar(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filename := me.ID + "-" + suffix + ext
-	dst := filepath.Join(s.AvatarDir(), filename)
-	if err := os.WriteFile(dst, data, 0o600); err != nil {
-		middleware.RespondError(w, http.StatusInternalServerError, "failed to store avatar")
+
+	// Save directly to the database in avatars table
+	_, err = s.repos.Pool.Exec(r.Context(), `
+		INSERT INTO avatars (filename, user_id, content_type, file_data)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (filename) DO UPDATE SET file_data = EXCLUDED.file_data, content_type = EXCLUDED.content_type
+	`, filename, db.ParseUUID(me.ID), detectedType, data)
+	if err != nil {
+		middleware.RespondError(w, http.StatusInternalServerError, "failed to store avatar in database")
 		return
+	}
+
+	// Remove previous avatar record if any
+	if me.AvatarURL != "" {
+		oldFilename := filepath.Base(me.AvatarURL)
+		if oldFilename != "" && oldFilename != filename {
+			_, _ = s.repos.Pool.Exec(r.Context(), `DELETE FROM avatars WHERE filename = $1`, oldFilename)
+		}
 	}
 
 	url := s.publicPath + "/" + filename

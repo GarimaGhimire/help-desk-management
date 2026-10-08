@@ -1,13 +1,13 @@
 package documents
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
-	"os"
 	"path/filepath"
-	"time"
 
 	internaldb "github.com/fintara/helpdesk/internal/db"
 	"github.com/fintara/helpdesk/pkg/db"
@@ -22,7 +22,7 @@ type DocumentResponse struct {
 	UploaderName string           `json:"uploader_name"`
 	GroupID      string           `json:"group_id,omitempty"`
 	Filename     string           `json:"filename"`
-	StoragePath  string           `json:"storage_path"`
+	MimeType     string           `json:"mime_type"`
 	Visibility   string           `json:"visibility"`
 	AllowedRoles []string         `json:"allowed_roles"`
 	AllowedUsers []UserAccessInfo `json:"allowed_users"`
@@ -67,6 +67,13 @@ func uploadDocument(repos *db.Repos) http.HandlerFunc {
 		}
 		defer file.Close()
 
+		// Read the entire file into memory — no disk writes
+		fileBytes, err := io.ReadAll(file)
+		if err != nil {
+			middleware.RespondError(w, http.StatusInternalServerError, "failed to read file contents")
+			return
+		}
+
 		visibility := r.FormValue("visibility")
 		if visibility == "" {
 			visibility = "all"
@@ -89,39 +96,27 @@ func uploadDocument(repos *db.Repos) http.HandlerFunc {
 			_ = json.Unmarshal([]byte(usersStr), &allowedUserIDs)
 		}
 
-		uploadDir := "./data/uploads/documents"
-		if err := os.MkdirAll(uploadDir, 0755); err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to create upload storage directory")
-			return
-		}
-
 		filename := filepath.Base(header.Filename)
-		out, err := os.CreateTemp(uploadDir, fmt.Sprintf("doc_%d_*_%s", time.Now().UnixNano(), filename))
-		if err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to store file")
-			return
-		}
-		defer out.Close()
 
-		if _, err := io.Copy(out, file); err != nil {
-			middleware.RespondError(w, http.StatusInternalServerError, "failed to save file contents")
-			return
+		// Detect MIME type from the file header bytes
+		mimeType := http.DetectContentType(fileBytes)
+		// Also try to get a more precise type from the extension
+		if extMime := mime.TypeByExtension(filepath.Ext(filename)); extMime != "" {
+			mimeType = extMime
 		}
-
-		actualStoragePath := out.Name()
 
 		docParams := internaldb.CreateDocumentParams{
 			UploadedBy:   db.ParseUUID(me.ID),
 			GroupID:      pgtype.UUID{},
 			Filename:     filename,
-			StoragePath:  actualStoragePath,
+			MimeType:     mimeType,
+			FileData:     fileBytes,
 			Visibility:   visibility,
 			AllowedRoles: allowedRoles,
 		}
 
 		docRow, err := repos.Queries.CreateDocument(r.Context(), docParams)
 		if err != nil {
-			os.Remove(actualStoragePath)
 			middleware.RespondError(w, http.StatusInternalServerError, "failed to save document record")
 			return
 		}
@@ -201,10 +196,10 @@ func listDocuments(repos *db.Repos) http.HandlerFunc {
 						}
 					}
 				}
-			}
 
-			if !canAccess {
-				continue
+				if !canAccess {
+					continue
+				}
 			}
 
 			accessList, _ := repos.Queries.GetDocumentAccessList(r.Context(), d.ID)
@@ -227,7 +222,7 @@ func listDocuments(repos *db.Repos) http.HandlerFunc {
 				UploadedBy:   uploaderIDStr,
 				UploaderName: d.UploaderName,
 				Filename:     d.Filename,
-				StoragePath:  d.StoragePath,
+				MimeType:     d.MimeType,
 				Visibility:   d.Visibility,
 				AllowedRoles: allowedRoles,
 				AllowedUsers: allowedUsers,
@@ -295,8 +290,11 @@ func downloadDocument(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", doc.Filename))
-		http.ServeFile(w, r, doc.StoragePath)
+		// Serve file bytes directly from the database — no filesystem access
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", doc.Filename))
+		w.Header().Set("Content-Type", doc.MimeType)
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(doc.FileData)))
+		http.ServeContent(w, r, doc.Filename, doc.CreatedAt.Time, bytes.NewReader(doc.FileData))
 	}
 }
 
@@ -390,7 +388,7 @@ func deleteDocument(repos *db.Repos) http.HandlerFunc {
 			return
 		}
 
-		os.Remove(doc.StoragePath)
+		// No filesystem cleanup needed — data lives only in the database
 		_ = repos.Queries.ClearDocumentAccessList(r.Context(), doc.ID)
 		if err := repos.Queries.DeleteDocument(r.Context(), doc.ID); err != nil {
 			middleware.RespondError(w, http.StatusInternalServerError, "failed to delete document record")

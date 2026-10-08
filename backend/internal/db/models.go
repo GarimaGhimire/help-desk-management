@@ -281,7 +281,8 @@ type Document struct {
 	UploadedBy     pgtype.UUID        `json:"uploaded_by"`
 	GroupID        pgtype.UUID        `json:"group_id"`
 	Filename       string             `json:"filename"`
-	StoragePath    string             `json:"storage_path"`
+	MimeType       string             `json:"mime_type"`
+	FileData       []byte             `json:"file_data"`
 	Visibility     string             `json:"visibility"`
 	PasswordHash   pgtype.Text        `json:"password_hash"`
 	AllowedRoles   []string           `json:"allowed_roles"`
